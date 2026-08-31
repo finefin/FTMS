@@ -11,10 +11,12 @@
 
   var PANEL_RADIUS = 2.0;
   var PANEL_SEGMENTS = 24;
-  var ARC_XR = 0.70;
-  var ARC_FLAT = 1.05;
-  var DROP_XR = 0.24;
-  var DROP_FLAT = 0.30;
+  
+  var ARC_XR = 0.80;
+  var ARC_FLAT = 1.25;
+
+  var DROP_XR = 0.7;
+  var DROP_FLAT = 0.7;
 
   var CW = 1280;
   var CH = 534;
@@ -366,7 +368,7 @@
 
       drawReadout(ctx, {
         x: 96, align: 'left', label: 'VELOCITY',
-        value: Math.round(sh.kms).toLocaleString('en-US'), unit: 'km/s',
+        value: Math.round(sh.kms).toLocaleString('en-US'), unit: '*10⁶ km/s',
         accent: HUD, pct: clamp01((fs.speed || 0) / (fs.speedMax || 60)),
         sub: nav ? nav.lightPct.toFixed(3) + '% c' : '--'
       });
