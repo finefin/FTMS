@@ -17,11 +17,25 @@
   // =====================================================================
 
   // --- Panel placement (metres) ---
-  var PANEL_RADIUS = 2.2;    // distance from the viewer
+  // The panel is anchored to the HEAD, not to the rig. A-Frame requires the
+  // 'local-floor' reference space, so the origin is the floor at the centre of
+  // the play space and the viewer starts wherever they are physically standing,
+  // facing wherever they are physically facing. A panel pinned to a fixed rig
+  // position is therefore only in front of you if you happen to be stood on the
+  // origin looking down -Z; otherwise it sits off to one side or behind you.
+  var PANEL_RADIUS = 2.0;    // distance from the viewer
   var PANEL_ARC = 0.70;      // radians of wrap (~40 deg)
   var PANEL_HEIGHT = 0.63;
-  var PANEL_Y = 1.44;        // just below standing eye height
+  var PANEL_DROP = 0.24;     // how far below eye level the panel centre sits
   var PANEL_SEGMENTS = 24;
+
+  // Lazy follow: the panel holds still while you glance around and only
+  // catches up once you turn past the dead zone, so it is always findable
+  // without being welded to your face.
+  var FOLLOW_DEADZONE = 0.30;  // rad (~17 deg) before the panel starts turning
+  var FOLLOW_SETTLE = 0.02;    // rad at which it stops again
+  var YAW_FOLLOW = 3.5;
+  var POS_FOLLOW = 4.0;
 
   // --- Canvas ---
   // Arc length is ~1.54 m at ~39 deg; a headset resolves roughly 20 px/deg,
@@ -452,12 +466,18 @@
           depthWrite: false, fog: false
         })
       );
-      this._mesh.position.y = PANEL_Y;
+      this._mesh.position.y = -PANEL_DROP;
       this._mesh.renderOrder = 10;
       this.el.object3D.add(this._mesh);
 
       this._last = 0;
       this._beat = 0;
+      this._yaw = 0;
+      this._following = false;
+      this._snap = true;
+      this._v = new THREE.Vector3();
+      this._q = new THREE.Quaternion();
+      this._e = new THREE.Euler();
       this._punch = 0;
       this._prevPower = null;
       this._shown = { power: 0, speed: 0, hr: 0, gauge: 0 };
@@ -466,7 +486,10 @@
       this.setVisible(this.data.forceVisible);
 
       var scene = this.el.sceneEl;
-      this._onEnter = function () { self.setVisible(self.isImmersive()); };
+      this._onEnter = function () {
+        self._snap = true;   // drop the panel straight in front on entry
+        self.setVisible(self.isImmersive());
+      };
       this._onExit = function () { self.setVisible(self.data.forceVisible); };
       scene.addEventListener('enter-vr', this._onEnter);
       scene.addEventListener('exit-vr', this._onExit);
@@ -494,8 +517,44 @@
     },
 
     setVisible: function (v) {
+      if (v && !this._visible) this._snap = true;
       this._visible = !!v;
       this.el.object3D.visible = !!v;
+    },
+
+    // Keep the panel in front of the viewer's head. Yaw only — following
+    // pitch too would pin it to the face and make it impossible to look past.
+    follow: function (dt) {
+      var scene = this.el.sceneEl;
+      var cam = scene && scene.camera;
+      var obj = this.el.object3D;
+      if (!cam || !obj.parent) return;
+
+      cam.getWorldPosition(this._v);
+      obj.parent.worldToLocal(this._v);
+      if (this._snap) obj.position.copy(this._v);
+      else obj.position.lerp(this._v, Math.min(1, dt * POS_FOLLOW));
+
+      cam.getWorldQuaternion(this._q);
+      this._e.setFromQuaternion(this._q, 'YXZ');
+      var camYaw = this._e.y;
+
+      if (this._snap) {
+        this._yaw = camYaw;
+        this._following = false;
+        this._snap = false;
+      } else {
+        var d = camYaw - this._yaw;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        if (Math.abs(d) > FOLLOW_DEADZONE) this._following = true;
+        if (this._following) {
+          this._yaw += d * Math.min(1, dt * YAW_FOLLOW);
+          if (Math.abs(d) < FOLLOW_SETTLE) this._following = false;
+        }
+      }
+      // The rig carries no transform of its own, so local yaw is world yaw.
+      obj.rotation.set(0, this._yaw, 0);
     },
 
     paint: function (dtSec) {
@@ -550,8 +609,16 @@
     },
 
     tick: function (time, timeDelta) {
+      // Re-sync from the live session state rather than trusting the
+      // enter-vr/exit-vr events alone: if the event ever fires before the
+      // session is registered, a one-shot check would leave the HUD hidden
+      // for the whole session with no way to recover.
+      var should = this.data.forceVisible || this.isImmersive();
+      if (should !== this._visible) this.setVisible(should);
       if (!this._visible) return;
+
       var dt = (timeDelta || 16) / 1000;
+      this.follow(dt);
 
       // Advance the heartbeat phase at the real BPM even between repaints.
       var rs = window.RideState || {};

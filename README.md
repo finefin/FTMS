@@ -200,7 +200,23 @@ for the next notification.
 
   The VR HUD is shown only once a real WebXR session exists. A-Frame also emits
   `enter-vr` for plain desktop fullscreen, which is *not* immersive, so the presence of
-  `sceneEl.xrSession` is what gates the switch.
+  `sceneEl.xrSession` is what gates the switch. That check is re-run every tick rather
+  than only on the events, so a mode change the events miss still resolves on the next
+  frame instead of leaving the HUD hidden for the whole session.
+
+  The panel is anchored to the **head**, not to the rig. A-Frame requires the
+  `local-floor` reference space, which puts the origin on the floor at the centre of
+  the play space — so the viewer starts wherever they happen to be standing, facing
+  wherever they happen to be facing. A panel at a fixed rig position is only in front
+  of you if you are stood on the origin looking down `-Z`; measured from realistic
+  standing poses it landed 45°, 79° and 152° off centre (behind the viewer in the last
+  case). Anchoring to the head puts it within ~1° of centre from any pose.
+
+  Head tracking is yaw-only and lazy: the panel holds still for glances under ~17° and
+  eases into place past that, so it is always findable without being welded to your
+  face. `PANEL_RADIUS`, `PANEL_DROP`, `PANEL_ARC` and `FOLLOW_DEADZONE` in
+  `ride-hud.js` tune the ergonomics; `ride-hud="forceVisible: true"` shows the panel
+  without a headset for layout work.
 
 ### Findings
 

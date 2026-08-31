@@ -416,19 +416,30 @@
   // -------------------------------------------------------------------
   // The DOM HUD is the windowed interface. Inside a headset it is replaced
   // by the in-scene HUD, so hide it there rather than showing both.
+  var vrScene = null;
+
+  function isImmersive() {
+    if (!vrScene) return false;
+    if (vrScene.xrSession) return true;
+    var r = vrScene.renderer;
+    return !!(r && r.xr && r.xr.isPresenting);
+  }
+
+  // Called from the render loop as well as from the events, so a mode change
+  // that the events miss still resolves on the next frame.
+  function syncVrClass() {
+    var want = isImmersive();
+    if (want !== document.body.classList.contains('in-vr')) {
+      document.body.classList.toggle('in-vr', want);
+    }
+  }
+
   function wireVrToggle(scene) {
-    function immersive() {
-      if (scene.xrSession) return true;
-      var r = scene.renderer;
-      return !!(r && r.xr && r.xr.isPresenting);
-    }
-    function sync() {
-      document.body.classList.toggle('in-vr', immersive());
-    }
-    scene.addEventListener('enter-vr', sync);
-    scene.addEventListener('exit-vr', sync);
-    scene.addEventListener('enter-ar', sync);
-    scene.addEventListener('exit-ar', sync);
+    vrScene = scene;
+    scene.addEventListener('enter-vr', syncVrClass);
+    scene.addEventListener('exit-vr', syncVrClass);
+    scene.addEventListener('enter-ar', syncVrClass);
+    scene.addEventListener('exit-ar', syncVrClass);
   }
 
   // -------------------------------------------------------------------
@@ -437,6 +448,7 @@
   // Driven from the scene's render loop rather than a second rAF loop.
   AFRAME.registerComponent('ride-tick', {
     tick: function () {
+      syncVrClass();
       updateHUD();
     }
   });
