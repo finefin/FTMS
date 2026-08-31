@@ -34,14 +34,31 @@
   var SUN_RADIUS = 17;
 
   // --- Canyon walls (the power graph) ---
-  var WALL_X_HALF = 44;      // walls stop inside the grid; nothing is built off-screen
-  var WALL_STEP_X = 4;       // 23 columns
+  // The canyon is built as two separate walls starting at the corridor edge.
+  // Nothing is drawn across the corridor itself: geometry lying flat on the
+  // ground and running along the travel axis is invisible when it scrolls (a
+  // line parallel to z, translated along z, projects to the same screen line),
+  // so it read as a permanently static cyan grid. The magenta ground grid is
+  // now the only floor, and it scrolls visibly because its rungs cross the
+  // travel axis.
+  var WALL_FLAT_HALF = 8;    // half-width of the riding corridor = wall footing
+  var WALL_X_HALF = 40;      // outer edge of each wall
+  var WALL_STEP_X = 4;       // 9 columns per side
   var WALL_STEP_Z = 4;       // one graph sample per 4 m of track
   var WALL_ROWS = 60;        // 240 m of visible history
   var WALL_Z_NEAR = 12;      // nearest row sits behind the camera so peaks sweep past
-  var WALL_FLAT_HALF = 9;    // half-width of the flat riding corridor
   var WALL_RIDGE_X = 24;     // where the wall reaches full height (the readable crest line)
   var WALL_MAXH = 42;        // height of a 100%-power sample
+  var WALL_BACK_DROP = 0.45; // how far the far side of the ridge falls away
+
+  // Every Nth sample row is drawn as a bright marker rung. The markers are
+  // keyed to the *absolute* sample index, so they travel one row toward the
+  // player per sample and sweep past — which is what actually sells riding
+  // along the curve. Without them a constant power output produces a uniform
+  // canyon, and rigidly translating a uniform canyon looks completely still.
+  var MARK_EVERY = 6;        // a marker every 24 m
+  var MARK_BOOST = 2.3;
+  var MARK_WHITEN = 0.5;
 
   // Metres of track per graph sample. Must equal the row spacing: the
   // treadmill scroll below relies on one sample occupying exactly one row.
@@ -212,108 +229,112 @@
   }
 
   function buildWalls() {
+    // Columns run from the corridor edge outward; the mirror side reuses them
+    // with a negated x. Nothing is built across the corridor.
     var xs = [];
-    for (var x = -WALL_X_HALF; x <= WALL_X_HALF; x += WALL_STEP_X) xs.push(x);
+    for (var x = WALL_FLAT_HALF; x <= WALL_X_HALF; x += WALL_STEP_X) xs.push(x);
+    var NC = xs.length;
     this._xs = xs;
 
-    // Cross-section profile: a flat corridor, a smooth rise, then a plateau
-    // beyond the ridge. The ridge column is where the crest line is drawn.
-    var envs = new Float32Array(xs.length);
-    var ridgeLeft = -1, ridgeRight = -1;
-    for (var i = 0; i < xs.length; i++) {
-      var d = Math.abs(xs[i]);
-      if (d <= WALL_FLAT_HALF) envs[i] = 0;
-      else envs[i] = smoothstep(Math.min(1, (d - WALL_FLAT_HALF) / (WALL_RIDGE_X - WALL_FLAT_HALF)));
-      if (xs[i] === -WALL_RIDGE_X) ridgeLeft = i;
-      if (xs[i] === WALL_RIDGE_X) ridgeRight = i;
+    // Cross-section: the footing sits on the ground, rises to a peak at the
+    // ridge, then falls away on a shallower back slope. Holding full height
+    // past the ridge instead made each wall read as a flat-topped mesa; the
+    // peak is what gives it a mountain silhouette, and it is where the crest
+    // line traces the power curve.
+    var envs = new Float32Array(NC);
+    var ridgeIdx = 0;
+    for (var i = 0; i < NC; i++) {
+      var xv = xs[i];
+      if (xv <= WALL_RIDGE_X) {
+        envs[i] = smoothstep((xv - WALL_FLAT_HALF) / (WALL_RIDGE_X - WALL_FLAT_HALF));
+      } else {
+        envs[i] = 1 - WALL_BACK_DROP * smoothstep((xv - WALL_RIDGE_X) / (WALL_X_HALF - WALL_RIDGE_X));
+      }
+      if (xv === WALL_RIDGE_X) ridgeIdx = i;
     }
     this._envs = envs;
-    this._ridgeLeft = ridgeLeft >= 0 ? ridgeLeft : 0;
-    this._ridgeRight = ridgeRight >= 0 ? ridgeRight : xs.length - 1;
+    this._ridgeIdx = ridgeIdx;
 
     var group = new THREE.Group();
+    var side, j, p;
 
-    // --- Wireframe mesh (horizontal rungs + vertical stringers) ---
-    var nH = WALL_ROWS * (xs.length - 1) * 2;
-    var nV = xs.length * (WALL_ROWS - 1) * 2;
-    var total = nH + nV;
+    // --- Wireframe: rungs (across the travel axis) + stringers (along it) ---
+    var nRung = 2 * WALL_ROWS * (NC - 1) * 2;
+    var nStr  = 2 * NC * (WALL_ROWS - 1) * 2;
+    var total = nRung + nStr;
 
     var pos = new Float32Array(total * 3);
     var col = new Float32Array(total * 3);
-    var p = 0, i2, j2;
-
-    for (j2 = 0; j2 < WALL_ROWS; j2++) {
-      var zr = rowZ(j2);
-      for (i2 = 0; i2 < xs.length - 1; i2++) {
-        pos[p] = xs[i2];     pos[p + 2] = zr; p += 3;
-        pos[p] = xs[i2 + 1]; pos[p + 2] = zr; p += 3;
+    p = 0;
+    for (side = 0; side < 2; side++) {
+      var sgn = side === 0 ? -1 : 1;
+      for (j = 0; j < WALL_ROWS; j++) {
+        var zr = rowZ(j);
+        for (i = 0; i < NC - 1; i++) {
+          pos[p] = sgn * xs[i];     pos[p + 2] = zr; p += 3;
+          pos[p] = sgn * xs[i + 1]; pos[p + 2] = zr; p += 3;
+        }
       }
     }
-    for (i2 = 0; i2 < xs.length; i2++) {
-      for (j2 = 0; j2 < WALL_ROWS - 1; j2++) {
-        pos[p] = xs[i2]; pos[p + 2] = rowZ(j2);     p += 3;
-        pos[p] = xs[i2]; pos[p + 2] = rowZ(j2 + 1); p += 3;
+    for (side = 0; side < 2; side++) {
+      var sgn2 = side === 0 ? -1 : 1;
+      for (i = 0; i < NC; i++) {
+        for (j = 0; j < WALL_ROWS - 1; j++) {
+          pos[p] = sgn2 * xs[i]; pos[p + 2] = rowZ(j);     p += 3;
+          pos[p] = sgn2 * xs[i]; pos[p + 2] = rowZ(j + 1); p += 3;
+        }
       }
     }
 
     var geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    var mat = new THREE.LineBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 1,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      fog: true
-    });
-    var mesh = new THREE.LineSegments(geo, mat);
-    group.add(mesh);
+    group.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 1,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: true
+    })));
 
     // --- Crest lines: the ridge polylines that read as the power curve ---
     // GL ignores LineBasicMaterial.linewidth, so each ridge is drawn as three
     // closely-spaced parallel lines; additively blended they give the crest
     // real visual weight against the busy grid behind it.
     var CREST_OFFSETS = [-0.45, 0, 0.45];
-    var crestCount = (WALL_ROWS - 1) * 2 * 2 * CREST_OFFSETS.length;
+    var crestCount = 2 * CREST_OFFSETS.length * (WALL_ROWS - 1) * 2;
     var cpos = new Float32Array(crestCount * 3);
     p = 0;
-    for (var side = 0; side < 2; side++) {
-      var xv = side === 0 ? -WALL_RIDGE_X : WALL_RIDGE_X;
+    for (side = 0; side < 2; side++) {
+      var sgn3 = side === 0 ? -1 : 1;
       for (var oi = 0; oi < CREST_OFFSETS.length; oi++) {
-        var xo = xv + CREST_OFFSETS[oi];
-        for (j2 = 0; j2 < WALL_ROWS - 1; j2++) {
-          cpos[p] = xo; cpos[p + 2] = rowZ(j2);     p += 3;
-          cpos[p] = xo; cpos[p + 2] = rowZ(j2 + 1); p += 3;
+        var xo = sgn3 * WALL_RIDGE_X + CREST_OFFSETS[oi];
+        for (j = 0; j < WALL_ROWS - 1; j++) {
+          cpos[p] = xo; cpos[p + 2] = rowZ(j);     p += 3;
+          cpos[p] = xo; cpos[p + 2] = rowZ(j + 1); p += 3;
         }
       }
     }
-    this._crestOffsets = CREST_OFFSETS;
     var cgeo = new THREE.BufferGeometry();
     cgeo.setAttribute('position', new THREE.Float32BufferAttribute(cpos, 3));
     cgeo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(crestCount * 3), 3));
-    var crest = new THREE.LineSegments(cgeo, new THREE.LineBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 1,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      fog: true
-    }));
-    group.add(crest);
+    group.add(new THREE.LineSegments(cgeo, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 1,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: true
+    })));
 
+    this._NC = NC;
+    this._crestPasses = 2 * CREST_OFFSETS.length;
     this._posAttr = geo.attributes.position;
     this._colAttr = geo.attributes.color;
     this._crestPosAttr = cgeo.attributes.position;
     this._crestColAttr = cgeo.attributes.color;
-    this._nH = nH;
 
-    // Ring buffer of graph samples (0..1), plus the per-row heights we last
-    // pushed into the vertex buffer.
+    // Ring buffer of graph samples (0..1) plus the per-row heights last
+    // pushed into the vertex buffers.
     this._ring = new Float32Array(RING_SIZE);
     this._rowH = new Float32Array(WALL_ROWS);
+    this._rowMark = new Uint8Array(WALL_ROWS);
     this._prevRowH = new Float32Array(WALL_ROWS);
     this._prevRowH.fill(-1);
+    this._prevN = null;
 
     // Float write-head in sample units; grows with distance travelled.
     this._idx = 0;
@@ -340,12 +361,16 @@
   function readProfile() {
     var n = Math.floor(this._idx);
     var rowH = this._rowH;
-    var changed = false;
+    var mark = this._rowMark;
+    var changed = n !== this._prevN;   // marker rungs shift on every new sample
     for (var j = 0; j < WALL_ROWS; j++) {
-      var v = this._ring[wrap(n - (WALL_ROWS - 1 - j))];
+      var sampleIdx = n - (WALL_ROWS - 1 - j);
+      var v = this._ring[wrap(sampleIdx)];
       rowH[j] = v;
+      mark[j] = (((sampleIdx % MARK_EVERY) + MARK_EVERY) % MARK_EVERY) === 0 ? 1 : 0;
       if (!changed && Math.abs(v - this._prevRowH[j]) > REDRAW_EPS) changed = true;
     }
+    this._prevN = n;
     return changed;
   }
 
@@ -353,65 +378,73 @@
     var xs = this._xs;
     var envs = this._envs;
     var rowH = this._rowH;
+    var mark = this._rowMark;
+    var NC = this._NC;
     var pos = this._posAttr.array;
     var col = this._colAttr.array;
     var cpos = this._crestPosAttr.array;
     var ccol = this._crestColAttr.array;
-    var cols = xs.length;
-    var i, j, p, li;
+    var side, i, j, li, mul, whiten;
 
-    // Horizontal rungs.
-    p = 1; // start at the first y component
-    for (j = 0; j < WALL_ROWS; j++) {
-      var hs = rowH[j] * WALL_MAXH;
-      for (i = 0; i < cols - 1; i++) {
-        var ha = envs[i] * hs;
-        var hb = envs[i + 1] * hs;
-        pos[p] = ha; p += 3;
-        pos[p] = hb; p += 3;
+    // --- Positions: only y changes; x and z were written at build time. ---
+    var p = 1;
+    for (side = 0; side < 2; side++) {
+      for (j = 0; j < WALL_ROWS; j++) {
+        var hs = rowH[j] * WALL_MAXH;
+        for (i = 0; i < NC - 1; i++) {
+          pos[p] = envs[i] * hs;     p += 3;
+          pos[p] = envs[i + 1] * hs; p += 3;
+        }
       }
     }
-    // Vertical stringers.
-    for (i = 0; i < cols; i++) {
-      var e = envs[i];
-      for (j = 0; j < WALL_ROWS - 1; j++) {
-        pos[p] = e * rowH[j] * WALL_MAXH;     p += 3;
-        pos[p] = e * rowH[j + 1] * WALL_MAXH; p += 3;
+    for (side = 0; side < 2; side++) {
+      for (i = 0; i < NC; i++) {
+        var e = envs[i];
+        for (j = 0; j < WALL_ROWS - 1; j++) {
+          pos[p] = e * rowH[j] * WALL_MAXH;     p += 3;
+          pos[p] = e * rowH[j + 1] * WALL_MAXH; p += 3;
+        }
       }
     }
 
-    // Colours, same vertex order.
+    // --- Colours, same vertex order. Marker rungs are brightened and pushed
+    // --- toward white so they read as distance markers streaming past.
+    function put(arr, at, idx, m, w) {
+      arr[at]     = (COLOR_LUT[idx]     * (1 - w) + w) * m;
+      arr[at + 1] = (COLOR_LUT[idx + 1] * (1 - w) + w) * m;
+      arr[at + 2] = (COLOR_LUT[idx + 2] * (1 - w) + w) * m;
+    }
+
     p = 0;
-    for (j = 0; j < WALL_ROWS; j++) {
-      var hr = rowH[j];
-      for (i = 0; i < cols - 1; i++) {
-        li = lutIndex(envs[i] * hr);
-        col[p] = COLOR_LUT[li]; col[p + 1] = COLOR_LUT[li + 1]; col[p + 2] = COLOR_LUT[li + 2]; p += 3;
-        li = lutIndex(envs[i + 1] * hr);
-        col[p] = COLOR_LUT[li]; col[p + 1] = COLOR_LUT[li + 1]; col[p + 2] = COLOR_LUT[li + 2]; p += 3;
+    for (side = 0; side < 2; side++) {
+      for (j = 0; j < WALL_ROWS; j++) {
+        var hr = rowH[j];
+        mul = mark[j] ? MARK_BOOST : 1;
+        whiten = mark[j] ? MARK_WHITEN : 0;
+        for (i = 0; i < NC - 1; i++) {
+          put(col, p, lutIndex(envs[i] * hr), mul, whiten);     p += 3;
+          put(col, p, lutIndex(envs[i + 1] * hr), mul, whiten); p += 3;
+        }
       }
     }
-    for (i = 0; i < cols; i++) {
-      var ec = envs[i];
-      for (j = 0; j < WALL_ROWS - 1; j++) {
-        li = lutIndex(ec * rowH[j]);
-        col[p] = COLOR_LUT[li]; col[p + 1] = COLOR_LUT[li + 1]; col[p + 2] = COLOR_LUT[li + 2]; p += 3;
-        li = lutIndex(ec * rowH[j + 1]);
-        col[p] = COLOR_LUT[li]; col[p + 1] = COLOR_LUT[li + 1]; col[p + 2] = COLOR_LUT[li + 2]; p += 3;
+    for (side = 0; side < 2; side++) {
+      for (i = 0; i < NC; i++) {
+        var ec = envs[i];
+        for (j = 0; j < WALL_ROWS - 1; j++) {
+          put(col, p, lutIndex(ec * rowH[j]), 1, 0);     p += 3;
+          put(col, p, lutIndex(ec * rowH[j + 1]), 1, 0); p += 3;
+        }
       }
     }
 
-    // Crest polylines: full-height ridge, so they trace the raw power curve.
+    // --- Crest polylines: full-height ridge, tracing the raw power curve. ---
     var cp = 1, cc = 0;
-    var passes = 2 * this._crestOffsets.length;
-    for (var side = 0; side < passes; side++) {
+    for (side = 0; side < this._crestPasses; side++) {
       for (j = 0; j < WALL_ROWS - 1; j++) {
         cpos[cp] = rowH[j] * WALL_MAXH;     cp += 3;
         cpos[cp] = rowH[j + 1] * WALL_MAXH; cp += 3;
-        li = lutIndex(rowH[j]);
-        ccol[cc] = COLOR_LUT[li]; ccol[cc + 1] = COLOR_LUT[li + 1]; ccol[cc + 2] = COLOR_LUT[li + 2]; cc += 3;
-        li = lutIndex(rowH[j + 1]);
-        ccol[cc] = COLOR_LUT[li]; ccol[cc + 1] = COLOR_LUT[li + 1]; ccol[cc + 2] = COLOR_LUT[li + 2]; cc += 3;
+        put(ccol, cc, lutIndex(rowH[j]), mark[j] ? MARK_BOOST : 1, mark[j] ? MARK_WHITEN : 0); cc += 3;
+        put(ccol, cc, lutIndex(rowH[j + 1]), mark[j + 1] ? MARK_BOOST : 1, mark[j + 1] ? MARK_WHITEN : 0); cc += 3;
       }
     }
 
