@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FTMS Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --card-border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #22d3ee;
+      --success: #4ade80;
+      --error: #f87171;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 8px;
+    }
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .dot.connected { background: var(--success); }
+    .dot.connecting { background: var(--accent); animation: pulse 1s infinite; }
+    .dot.error { background: var(--error); }
+    @keyframes pulse { 50% { opacity: 0.3; } }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .card .label {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .card .value {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .card .unit {
+      font-size: 1rem;
+      color: var(--muted);
+      margin-left: 4px;
+    }
+    .banner {
+      border: 1px dashed var(--card-border);
+      border-radius: 12px;
+      padding: 48px 24px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .device-info { margin-bottom: 24px; font-size: 0.95rem; color: var(--muted); }
+    .device-info strong { color: var(--text); }
+    .chart-section {
+      margin-top: 24px;
+    }
+    .chart-section h2 {
+      font-size: 1.1rem;
+      margin-bottom: 12px;
+      color: var(--muted);
+    }
+    .chart-card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      position: relative;
+      height: 300px;
+    }
+  </style>
+</head>
+<body>
+  <h1>FTMS Dashboard</h1>
+  <div class="status-bar">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Disconnected</span>
+    <span id="deviceName" style="margin-left:auto"></span>
+  </div>
+  <div class="device-info" id="deviceInfo"></div>
+  <div class="grid" id="metrics"></div>
+  <div class="banner" id="emptyBanner">Waiting for data from an FTMS device…</div>
+  <div class="chart-section" id="chartSection" style="display:none">
+    <h2>Live Graph</h2>
+    <div class="chart-card">
+      <canvas id="liveChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const MAX_POINTS = 120;
+
+    const chartColors = {
+      speed: '#22d3ee',
+      cadence: '#a78bfa',
+      power: '#f59e0b',
+      heartRate: '#f87171',
+      resistance: '#4ade80',
+      strokeRate: '#22d3ee',
+      stepRate: '#a78bfa',
+      pace: '#f59e0b',
+      inclination: '#4ade80',
+    };
+
+    const chartFields = {
+      treadmill: [
+        { key: 'instantaneousSpeed', label: 'Speed', color: chartColors.speed },
+        { key: 'inclination', label: 'Incline', color: chartColors.inclination },
+        { key: 'heartRate', label: 'Heart Rate', color: chartColors.heartRate },
+      ],
+      indoor_bike: [
+        { key: 'instantaneousSpeed', label: 'Speed', color: chartColors.speed },
+        { key: 'instantaneousCadence', label: 'Cadence', color: chartColors.cadence },
+        { key: 'instantaneousPower', label: 'Power', color: chartColors.power },
+        { key: 'heartRate', label: 'Heart Rate', color: chartColors.heartRate },
+      ],
+      cross_trainer: [
+        { key: 'instantaneousSpeed', label: 'Speed', color: chartColors.speed },
+        { key: 'instantaneousPower', label: 'Power', color: chartColors.power },
+        { key: 'inclination', label: 'Incline', color: chartColors.inclination },
+        { key: 'heartRate', label: 'Heart Rate', color: chartColors.heartRate },
+      ],
+      rower: [
+        { key: 'strokeRate', label: 'Stroke Rate', color: chartColors.strokeRate },
+        { key: 'instantaneousPower', label: 'Power', color: chartColors.power },
+        { key: 'heartRate', label: 'Heart Rate', color: chartColors.heartRate },
+      ],
+      step_climber: [
+        { key: 'stepsPerMinute', label: 'Steps/min', color: chartColors.stepRate },
+        { key: 'heartRate', label: 'Heart Rate', color: chartColors.heartRate },
+      ],
+      stair_climber: [
+        { key: 'stepsPerMinute', label: 'Steps/min', color: chartColors.stepRate },
+        { key: 'heartRate', label: 'Heart Rate', color: chartColors.heartRate },
+      ],
+    };
+
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    let chart = null;
+    let currentEquipment = null;
+    let timeLabels = [];
+    let chartDatasets = {};
+
+    const formatDistance = (meters) => {
+      if (meters == null) return "—";
+      if (meters >= 1000) return (meters / 1000).toFixed(2) + " km";
+      return meters.toFixed(0) + " m";
+    };
+
+    const formatTime = (seconds) => {
+      if (seconds == null) return "—";
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = seconds % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+      return `${m}:${String(s).padStart(2,"0")}`;
+    };
+
+    const metricDefs = {
+      treadmill: [
+        ["Speed", "instantaneousSpeed", "km/h", (v) => v == null ? "—" : v.toFixed(1)],
+        ["Avg Speed", "averageSpeed", "km/h", (v) => v == null ? "—" : v.toFixed(1)],
+        ["Distance", "totalDistance", "", formatDistance],
+        ["Incline", "inclination", "%", (v) => v == null ? "—" : v.toFixed(1)],
+        ["Heart Rate", "heartRate", "bpm", (v) => v ?? "—"],
+        ["Elapsed", "elapsedTime", "", formatTime],
+      ],
+      indoor_bike: [
+        ["Speed", "instantaneousSpeed", "km/h", (v) => v == null ? "—" : v.toFixed(1)],
+        ["Cadence", "instantaneousCadence", "rpm", (v) => v == null ? "—" : v.toFixed(0)],
+        ["Power", "instantaneousPower", "W", (v) => v ?? "—"],
+        ["Distance", "totalDistance", "", formatDistance],
+        ["Resistance", "resistanceLevel", "", (v) => v ?? "—"],
+        ["Heart Rate", "heartRate", "bpm", (v) => v ?? "—"],
+        ["Elapsed", "elapsedTime", "", formatTime],
+      ],
+      cross_trainer: [
+        ["Speed", "instantaneousSpeed", "km/h", (v) => v == null ? "—" : v.toFixed(1)],
+        ["Step Rate", "stepPerMinute", "spm", (v) => v ?? "—"],
+        ["Distance", "totalDistance", "", formatDistance],
+        ["Stride", "strideCount", "", (v) => v ?? "—"],
+        ["Power", "instantaneousPower", "W", (v) => v ?? "—"],
+        ["Incline", "inclination", "%", (v) => v == null ? "—" : v.toFixed(1)],
+        ["Heart Rate", "heartRate", "bpm", (v) => v ?? "—"],
+        ["Elapsed", "elapsedTime", "", formatTime],
+      ],
+      rower: [
+        ["Stroke Rate", "strokeRate", "spm", (v) => v == null ? "—" : v.toFixed(1)],
+        ["Distance", "totalDistance", "", formatDistance],
+        ["Pace", "instantaneousPace", "s", (v) => v ?? "—"],
+        ["Power", "instantaneousPower", "W", (v) => v ?? "—"],
+        ["Heart Rate", "heartRate", "bpm", (v) => v ?? "—"],
+        ["Elapsed", "elapsedTime", "", formatTime],
+      ],
+    };
+
+    const equipmentLabels = {
+      treadmill: "Treadmill",
+      indoor_bike: "Indoor Bike",
+      cross_trainer: "Cross Trainer",
+      rower: "Rower",
+      step_climber: "Step Climber",
+      stair_climber: "Stair Climber",
+    };
+
+    function initChart(equipment) {
+      if (chart) {
+        chart.destroy();
+        chart = null;
+      }
+      timeLabels = [];
+      chartDatasets = {};
+
+      const fields = chartFields[equipment] || [];
+      if (fields.length === 0) return;
+
+      const datasets = fields.map((f) => {
+        chartDatasets[f.key] = [];
+        return {
+          label: f.label,
+          data: [],
+          borderColor: f.color,
+          backgroundColor: f.color + '20',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: false,
+          yAxisID: 'y',
+        };
+      });
+
+      const ctx = document.getElementById('liveChart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: timeLabels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: {
+              labels: { color: '#94a3b8', usePointStyle: true, pointStyle: 'circle', padding: 16 },
+            },
+          },
+          scales: {
+            x: {
+              ticks: { color: '#64748b', maxTicksLimit: 10 },
+              grid: { color: '#1e293b' },
+            },
+            y: {
+              ticks: { color: '#64748b' },
+              grid: { color: '#1e293b' },
+            },
+          },
+        },
+      });
+
+      document.getElementById('chartSection').style.display = '';
+    }
+
+    function updateChart(data) {
+      if (!chart || !currentEquipment) return;
+      const fields = chartFields[currentEquipment] || [];
+      if (fields.length === 0) return;
+
+      const elapsed = data.elapsedTime;
+      const label = elapsed != null ? formatTime(elapsed) : timeLabels.length;
+      timeLabels.push(label);
+
+      fields.forEach((f) => {
+        chartDatasets[f.key].push(data[f.key] ?? null);
+      });
+
+      if (timeLabels.length > MAX_POINTS) {
+        timeLabels.shift();
+        fields.forEach((f) => chartDatasets[f.key].shift());
+      }
+
+      chart.data.labels = [...timeLabels];
+      chart.data.datasets.forEach((ds, i) => {
+        ds.data = [...chartDatasets[fields[i].key]];
+      });
+      chart.update('none');
+    }
+
+    function renderMetrics(equipment, data) {
+      const banner = document.getElementById("emptyBanner");
+      const metrics = document.getElementById("metrics");
+      const deviceInfo = document.getElementById("deviceInfo");
+      if (banner) banner.style.display = "none";
+      deviceInfo.textContent = equipmentLabels[equipment] ? `Device type: ${equipmentLabels[equipment]}` : "";
+
+      if (equipment !== currentEquipment) {
+        currentEquipment = equipment;
+        timeLabels = [];
+        initChart(equipment);
+      }
+
+      const defs = metricDefs[equipment] || [];
+      metrics.innerHTML = defs.map(([label, key, unit, fmt]) => `
+        <div class="card">
+          <div class="label">${label}</div>
+          <div class="value">${fmt(data[key])}<span class="unit">${unit}</span></div>
+        </div>
+      `).join("");
+
+      updateChart(data);
+    }
+
+    const stateTitles = {
+      idle: "Idle",
+      scanning: "Scanning for device…",
+      connecting: "Connecting…",
+      connected: "Connected",
+      disconnected: "Disconnected",
+      error: "Error",
+    };
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "data") {
+        renderMetrics(msg.equipment, msg.data);
+      } else if (msg.type === "state") {
+        setState(msg.state, msg.deviceName);
+      }
+    };
+
+    function setState(state, deviceName) {
+      const dot = document.getElementById("statusDot");
+      const text = document.getElementById("statusText");
+      const dev = document.getElementById("deviceName");
+      dot.className = "dot" + (state === "connected" ? " connected" : state === "connecting" || state === "scanning" ? " connecting" : state === "error" ? " error" : "");
+      text.textContent = stateTitles[state] || state;
+      if (deviceName) dev.textContent = deviceName;
+    }
+
+    ws.onopen = () => { /* wait for server state */ };
+    ws.onerror = () => setState("error");
+  </script>
+</body>
+</html>

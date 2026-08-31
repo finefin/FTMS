@@ -1,0 +1,270 @@
+// Low-level BLE connection management: scanning, connecting, and subscribing
+// to GATT characteristic notifications via noble-winrt.
+
+import noble from "noble-winrt";
+import { EventEmitter } from "events";
+import {
+  FTMS_SERVICE_UUID,
+  FTMS_SERVICE_UUID_LONG,
+} from "../ftms/constants.js";
+import type { DiscoveredDevice, ConnectionState } from "./types.js";
+
+const DEBUG = process.env.DEBUG_BLE === "1";
+
+const FTMS_SHORT = FTMS_SERVICE_UUID.toLowerCase();
+const FTMS_LONG = FTMS_SERVICE_UUID_LONG.toLowerCase();
+
+type NoblePeripheral = any;
+type NobleService = any;
+type NobleCharacteristic = any;
+
+function promisify<T>(fn: (cb: (err: Error | null, ...args: any[]) => void) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    fn((err: Error | null, ...args: any[]) => {
+      if (err) reject(err);
+      else resolve(args.length > 1 ? (args as T) : (args[0] as T));
+    });
+  });
+}
+
+function normalizeUuid(uuid: string): string {
+  return uuid.replace(/[{}]/g, "").toLowerCase();
+}
+
+function shortUuid(uuid: string): string {
+  const normalized = normalizeUuid(uuid);
+  const first = normalized.split("-")[0];
+  return first.length === 8 ? first.slice(4) : first;
+}
+
+function toUpperKey(uuid: string): string {
+  return normalizeUuid(uuid).toUpperCase();
+}
+
+export class BleConnection extends EventEmitter {
+  private peripheral: NoblePeripheral | null = null;
+  private ftmsService: NobleService | null = null;
+  private characteristics: Map<string, NobleCharacteristic> = new Map();
+  private discovered: Map<string, NoblePeripheral> = new Map();
+  private _state: ConnectionState = "idle";
+
+  get state(): ConnectionState {
+    return this._state;
+  }
+
+  private setState(state: ConnectionState, detail?: { deviceId?: string; error?: string }) {
+    this._state = state;
+    this.emit("stateChange", { state, ...detail });
+  }
+
+  async init(timeoutMs = 15000): Promise<void> {
+    if (noble.state === "poweredOn") return;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        noble.removeListener("stateChange", onStateChange);
+        reject(
+          new Error(
+            `Bluetooth did not reach "poweredOn" within ${timeoutMs}ms ` +
+              `(current state: ${noble.state}).`
+          )
+        );
+      }, timeoutMs);
+
+      const onStateChange = (state: string) => {
+        if (DEBUG) console.log(`[ble] adapter state: ${state}`);
+        if (state === "poweredOn") {
+          clearTimeout(timer);
+          noble.removeListener("stateChange", onStateChange);
+          resolve();
+        } else if (["unsupported", "unauthorized", "unknown"].includes(state)) {
+          clearTimeout(timer);
+          noble.removeListener("stateChange", onStateChange);
+          reject(new Error(`Bluetooth adapter state is "${state}".`));
+        }
+      };
+
+      noble.on("stateChange", onStateChange);
+    });
+  }
+
+  async scan(timeoutMs = 10000): Promise<DiscoveredDevice[]> {
+    this.setState("scanning");
+    const devices: DiscoveredDevice[] = [];
+    const seen = new Set<string>();
+
+    const isFtmsUuid = (uuid: unknown): boolean => {
+      if (typeof uuid !== "string") return false;
+      const u = normalizeUuid(uuid);
+      return u === FTMS_SHORT || u === FTMS_LONG || u.endsWith(FTMS_SHORT);
+    };
+
+    const hasFtms = (peripheral: NoblePeripheral): boolean => {
+      const advertisement = peripheral.advertisement ?? {};
+      const serviceUuids: unknown[] = advertisement.serviceUuids ?? [];
+      if (serviceUuids.some(isFtmsUuid)) return true;
+      const serviceData = advertisement.serviceData ?? [];
+      if (Array.isArray(serviceData) && serviceData.some((d: any) => isFtmsUuid(d?.uuid))) return true;
+      if (serviceData && typeof serviceData === "object" && !Array.isArray(serviceData)) {
+        if (Object.keys(serviceData).some(isFtmsUuid)) return true;
+      }
+      const solicitation: unknown[] = advertisement.serviceSolicitationUuids ?? [];
+      if (solicitation.some(isFtmsUuid)) return true;
+      return false;
+    };
+
+    return new Promise((resolve) => {
+      const onDiscover = (peripheral: NoblePeripheral) => {
+        if (DEBUG) {
+          const adv = peripheral.advertisement ?? {};
+          console.log(
+            `[ble] discover: ${adv.localName ?? "(no name)"} id=${peripheral.id}` +
+              ` addr=${peripheral.address} rssi=${peripheral.rssi}` +
+              ` uuids=${JSON.stringify(adv.serviceUuids ?? [])}`
+          );
+        }
+        if (!hasFtms(peripheral)) return;
+        const id = peripheral.id ?? peripheral.address;
+        if (seen.has(id)) return;
+        seen.add(id);
+
+        const device: DiscoveredDevice = {
+          id,
+          name: peripheral.advertisement?.localName ?? peripheral.address ?? id,
+          address: peripheral.address ?? id,
+          rssi: peripheral.rssi ?? 0,
+          serviceData: peripheral.advertisement?.serviceUuids,
+          advertisement: peripheral.advertisement,
+        };
+        this.discovered.set(id, peripheral);
+        devices.push(device);
+        this.emit("device", device);
+      };
+
+      noble.on("discover", onDiscover);
+      noble.startScanning([], true, () => {});
+      setTimeout(() => {
+        noble.removeListener("discover", onDiscover);
+        noble.stopScanning(() => {});
+        this._state = "idle";
+        resolve(devices);
+      }, timeoutMs);
+    });
+  }
+
+  async connect(deviceId: string): Promise<void> {
+    this.setState("connecting", { deviceId });
+
+    let peripheral = this.discovered.get(deviceId);
+    if (!peripheral) {
+      peripheral = await new Promise<NoblePeripheral>((resolve, reject) => {
+        const onDiscover = (p: NoblePeripheral) => {
+          const id = p.id ?? p.address;
+          if (id === deviceId) {
+            clearTimeout(timer);
+            noble.removeListener("discover", onDiscover);
+            resolve(p);
+          }
+        };
+        const timer = setTimeout(() => {
+          noble.removeListener("discover", onDiscover);
+          reject(new Error("Device not found during scan"));
+        }, 10000);
+        noble.on("discover", onDiscover);
+        noble.startScanning([], true, () => {});
+      });
+      noble.stopScanning(() => {});
+    }
+
+    try {
+      peripheral.on("disconnect", () => {
+        this.peripheral = null;
+        this.ftmsService = null;
+        this.characteristics.clear();
+        this.setState("disconnected", { deviceId });
+      });
+
+      await promisify<void>((cb) => peripheral.connect(cb));
+      this.peripheral = peripheral;
+      this.setState("connected", { deviceId });
+
+      const services = await promisify<NobleService[]>((cb) =>
+        peripheral.discoverServices([], cb)
+      );
+      if (DEBUG) {
+        console.log(
+          `[ble] discovered services: ` +
+            JSON.stringify((services ?? []).map((s: NobleService) => String(s.uuid)))
+        );
+      }
+      const ftmsServices = (services ?? []).filter((s: NobleService) => {
+        const u = normalizeUuid(String(s.uuid ?? ""));
+        return (
+          u === FTMS_SHORT ||
+          u === FTMS_LONG ||
+          u.endsWith(FTMS_SHORT) ||
+          u.includes(FTMS_SHORT)
+        );
+      });
+      if (ftmsServices.length === 0) {
+        throw new Error("FTMS service not found on device");
+      }
+
+      this.ftmsService = ftmsServices[0];
+      const chars = await promisify<NobleCharacteristic[]>((cb) =>
+        this.ftmsService.discoverCharacteristics([], cb)
+      );
+      for (const char of chars) {
+        const uuid = normalizeUuid(String(char.uuid ?? ""));
+        this.characteristics.set(toUpperKey(uuid), char);
+        this.characteristics.set(toUpperKey(shortUuid(uuid)), char);
+      }
+    } catch (err: any) {
+      this.setState("error", { deviceId, error: err.message });
+      throw err;
+    }
+  }
+
+  getCharacteristic(uuid: string): NobleCharacteristic | undefined {
+    const short = shortUuid(uuid);
+    return (
+      this.characteristics.get(toUpperKey(uuid)) ??
+      this.characteristics.get(toUpperKey(short))
+    );
+  }
+
+  async subscribeNotifications(uuid: string, onData: (data: Buffer) => void): Promise<void> {
+    const char = this.getCharacteristic(uuid);
+    if (!char) throw new Error(`Characteristic ${uuid} not found`);
+
+    char.on("data", (data: Buffer, isNotification: boolean) => {
+      if (isNotification && Buffer.isBuffer(data) && data.length > 0) {
+        onData(data);
+      }
+    });
+
+    await promisify<void>((cb) => char.subscribe(cb));
+  }
+
+  async read(uuid: string): Promise<Buffer> {
+    const char = this.getCharacteristic(uuid);
+    if (!char) throw new Error(`Characteristic ${uuid} not found`);
+    return promisify<Buffer>((cb) => char.read(cb));
+  }
+
+  async write(uuid: string, data: Buffer): Promise<void> {
+    const char = this.getCharacteristic(uuid);
+    if (!char) throw new Error(`Characteristic ${uuid} not found`);
+    await promisify<void>((cb) => char.write(data, false, cb));
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.peripheral) {
+      await promisify<void>((cb) => this.peripheral.disconnect(cb)).catch(() => {});
+      this.peripheral = null;
+      this.ftmsService = null;
+      this.characteristics.clear();
+      this.setState("disconnected");
+    }
+    noble.stopScanning(() => {});
+  }
+}
