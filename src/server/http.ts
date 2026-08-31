@@ -12,6 +12,22 @@ import type { WsServer } from "./ws.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HTML_PATH = join(__dirname, "public", "index.html");
+const RIDE_HTML_PATH = join(__dirname, "public", "ride.html");
+
+function serveAsset(c: any, name: string) {
+  const file = join(__dirname, "public", name);
+  try {
+    const buf = readFileSync(file);
+    const contentType = name.endsWith(".js")
+      ? "application/javascript"
+      : name.endsWith(".css")
+        ? "text/css"
+        : "application/octet-stream";
+    return c.body(buf, 200, { "Content-Type": contentType as any, "Cache-Control": "no-cache" });
+  } catch {
+    return c.text("Not found", 404);
+  }
+}
 
 export function createApp(
   client: FTMSClient,
@@ -27,6 +43,19 @@ export function createApp(
       return c.text("Dashboard not found. Build the project or run via tsx.", 500);
     }
   });
+
+  app.get("/ride", (c) => {
+    try {
+      const html = readFileSync(RIDE_HTML_PATH, "utf-8");
+      return c.html(html);
+    } catch {
+      return c.text("Ride view not found. Build the project or run via tsx.", 500);
+    }
+  });
+
+  app.get("/ride-landscape.js", (c) => serveAsset(c, "ride-landscape.js"));
+  app.get("/ride-hud.js", (c) => serveAsset(c, "ride-hud.js"));
+  app.get("/ride.js", (c) => serveAsset(c, "ride.js"));
 
   app.get("/api/status", (c) => {
     return c.json({

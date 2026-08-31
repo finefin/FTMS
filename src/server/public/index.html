@@ -46,6 +46,27 @@
     .dot.connecting { background: var(--accent); animation: pulse 1s infinite; }
     .dot.error { background: var(--error); }
     @keyframes pulse { 50% { opacity: 0.3; } }
+    .scan-btn {
+      background: var(--accent);
+      color: #082f49;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 18px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s ease, transform 0.05s ease;
+    }
+    .scan-btn:hover:not(:disabled) { opacity: 0.85; }
+    .scan-btn:active:not(:disabled) { transform: scale(0.96); }
+    .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .scan-result {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 16px;
+      min-height: 1.2em;
+    }
+    .scan-result .fw { color: var(--text); }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -106,8 +127,10 @@
   <div class="status-bar">
     <span class="dot" id="statusDot"></span>
     <span id="statusText">Disconnected</span>
+    <button id="scanBtn" class="scan-btn">Scan</button>
     <span id="deviceName" style="margin-left:auto"></span>
   </div>
+  <div class="scan-result" id="scanResult"></div>
   <div class="device-info" id="deviceInfo"></div>
   <div class="grid" id="metrics"></div>
   <div class="banner" id="emptyBanner">Waiting for data from an FTMS device…</div>
@@ -368,6 +391,44 @@
 
     ws.onopen = () => { /* wait for server state */ };
     ws.onerror = () => setState("error");
+
+    const scanBtn = document.getElementById("scanBtn");
+    const scanResult = document.getElementById("scanResult");
+
+    async function scan() {
+      scanBtn.disabled = true;
+      scanBtn.textContent = "Scanning…";
+      scanResult.textContent = "Scanning for FTMS devices…";
+
+      try {
+        const res = await fetch("/api/devices");
+        if (!res.ok) throw new Error("Request failed");
+        const devices = await res.json();
+
+        if (!Array.isArray(devices) || devices.length === 0) {
+          scanResult.innerHTML = "No FTMS devices found.";
+          return;
+        }
+
+        const target = devices[0];
+        scanResult.innerHTML = `Found <span class="fw">${devices.length}</span> device(s) — connecting to <span class="fw">${target.name || target.id}</span>…`;
+
+        const con = await fetch(`/api/connect?id=${encodeURIComponent(target.id)}`);
+        const cj = await con.json();
+        if (cj.connected) {
+          scanResult.innerHTML = `Connected to <span class="fw">${target.name || target.id}</span>`;
+        } else {
+          scanResult.innerHTML = "Device found but failed to connect: " + (cj.error || "unknown error");
+        }
+      } catch (err) {
+        scanResult.textContent = "Scan failed: " + err.message;
+      } finally {
+        scanBtn.disabled = false;
+        scanBtn.textContent = "Scan";
+      }
+    }
+
+    scanBtn.addEventListener("click", scan);
   </script>
 </body>
 </html>
