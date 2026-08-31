@@ -2,91 +2,463 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>FTMS Ride</title>
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
   <style>
-    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    :root {
+      --cyan: #00f6ff;
+      --magenta: #ff2bd6;
+      --pink: #ff36c8;
+      --amber: #ffd166;
+      --ink: #05040e;
+      --glass: rgba(10, 5, 26, 0.52);
+      --edge: rgba(255, 255, 255, 0.10);
+      --num: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+      --ui: "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
 
-    /* HUD overlay (DOM, above the WebGL canvas) */
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ink); }
+    body { font-family: var(--ui); }
+
+    /* ================= HUD shell ================= */
     #hud {
       position: fixed;
-      top: 20px;
-      left: 20px;
+      inset: 0;
       z-index: 10;
-      color: #fff;
-      font-family: "Segoe UI", system-ui, sans-serif;
       pointer-events: none;
       opacity: 0;
-      transition: opacity 0.4s ease;
-      text-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
+      transition: opacity 0.5s ease;
+      color: #fff;
     }
     #hud.visible { opacity: 1; }
-    #hud .row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
-    #hud .label {
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: #9be8ff;
-      min-width: 74px;
-    }
-    #hud .value { font-size: 28px; font-weight: 700; color: #fff; }
-    #hud .unit { font-size: 13px; color: #9be8ff; }
-    #hud .equipment { font-size: 14px; color: #ff8ade; margin-top: 8px; }
 
-    /* Full-screen connection overlay */
+    /* Inside a headset the in-scene HUD takes over — never show both. */
+    body.in-vr #hud,
+    body.in-vr #overlay,
+    body.in-vr .hint { display: none !important; }
+
+    /* Subtle CRT wash over the whole frame. */
+    #hud::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0.028) 0px,
+          rgba(255, 255, 255, 0.028) 1px,
+          transparent 1px,
+          transparent 3px
+        ),
+        radial-gradient(ellipse at 50% 55%, transparent 45%, rgba(5, 2, 16, 0.55) 100%);
+      mix-blend-mode: screen;
+    }
+
+    /* ================= Top status strip ================= */
+    .hud-top {
+      position: absolute;
+      top: 18px;
+      left: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 14px 7px 11px;
+      background: var(--glass);
+      border: 1px solid var(--edge);
+      border-left: 2px solid var(--cyan);
+      border-radius: 3px;
+      backdrop-filter: blur(9px);
+      -webkit-backdrop-filter: blur(9px);
+      box-shadow: 0 0 22px rgba(0, 246, 255, 0.14);
+    }
+    .lamp {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #555; box-shadow: 0 0 8px currentColor;
+      flex: none;
+    }
+    .lamp-connected { background: #38ffa8; color: #38ffa8; animation: lampPulse 2.4s infinite; }
+    .lamp-scanning, .lamp-connecting { background: var(--amber); color: var(--amber); animation: lampPulse 0.9s infinite; }
+    .lamp-error { background: #ff4d6d; color: #ff4d6d; }
+    .lamp-demo { background: var(--magenta); color: var(--magenta); }
+    @keyframes lampPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    .dev {
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #dfe9ff;
+    }
+    .chip {
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--pink);
+      padding: 3px 8px;
+      border: 1px solid rgba(255, 54, 200, 0.4);
+      border-radius: 2px;
+      background: rgba(255, 54, 200, 0.08);
+    }
+
+    /* ================= Power curve strip ================= */
+    .curve {
+      position: absolute;
+      left: 50%;
+      bottom: 208px;
+      transform: translateX(-50%);
+      width: min(760px, 78vw);
+    }
+    .curve canvas {
+      display: block;
+      width: 100%;
+      height: 76px;
+    }
+    .curve-cap {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-top: 2px;
+      padding: 0 2px;
+      border-top: 1px solid rgba(255, 43, 214, 0.28);
+      font-size: 9.5px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+    .curve-cap span:first-child { color: var(--magenta); }
+    .curve-note { color: rgba(220, 200, 255, 0.42); letter-spacing: 0.13em; }
+
+    /* ================= Instrument dock ================= */
+    .dock {
+      position: absolute;
+      left: 50%;
+      bottom: 34px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: flex-end;
+      gap: 22px;
+    }
+
+    .pod {
+      position: relative;
+      background: var(--glass);
+      border: 1px solid var(--edge);
+      border-radius: 4px;
+      backdrop-filter: blur(11px);
+      -webkit-backdrop-filter: blur(11px);
+      padding: 14px 20px 13px;
+    }
+    /* Cyberpunk corner brackets. */
+    .pod::before, .pod::after {
+      content: "";
+      position: absolute;
+      width: 15px; height: 15px;
+      border: 1px solid var(--cyan);
+      opacity: 0.75;
+    }
+    .pod::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+    .pod::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+
+    .pod.side { width: 172px; }
+
+    .pod-l {
+      font-size: 9.5px;
+      letter-spacing: 0.26em;
+      text-transform: uppercase;
+      color: rgba(155, 232, 255, 0.85);
+    }
+    .pod-v {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      margin-top: 3px;
+      font-family: var(--num);
+      font-variant-numeric: tabular-nums;
+      font-size: 34px;
+      font-weight: 600;
+      line-height: 1;
+      color: #fff;
+      text-shadow: 0 0 14px rgba(0, 246, 255, 0.5);
+    }
+    .pod-v i {
+      font-style: normal;
+      font-family: var(--ui);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      color: rgba(155, 232, 255, 0.8);
+      text-shadow: none;
+    }
+
+    .bar {
+      position: relative;
+      height: 3px;
+      margin-top: 11px;
+      background: rgba(255, 255, 255, 0.10);
+      overflow: hidden;
+    }
+    .bar span {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      background: linear-gradient(90deg, var(--cyan), #9be8ff);
+      box-shadow: 0 0 10px var(--cyan);
+      transition: width 0.12s linear;
+    }
+    .bar.heat span {
+      background: linear-gradient(90deg, var(--amber), #ff6b8b);
+      box-shadow: 0 0 10px rgba(255, 209, 102, 0.9);
+    }
+
+    .pod-sub {
+      margin-top: 9px;
+      font-size: 10.5px;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+      color: rgba(210, 225, 255, 0.5);
+    }
+    .pod-sub b {
+      font-family: var(--num);
+      font-variant-numeric: tabular-nums;
+      font-size: 13px;
+      font-weight: 600;
+      color: #eaf4ff;
+    }
+
+    .heart {
+      display: inline-block;
+      color: #ff5d7e;
+      font-size: 13px;
+      text-shadow: 0 0 10px rgba(255, 93, 126, 0.9);
+      transform-origin: center;
+    }
+    .heart.beating { animation: beat 1s infinite ease-out; }
+    @keyframes beat {
+      0%   { transform: scale(1); }
+      12%  { transform: scale(1.42); }
+      26%  { transform: scale(1.05); }
+      38%  { transform: scale(1.22); }
+      60%, 100% { transform: scale(1); }
+    }
+
+    /* ---- Power pod (the star: it drives the mountains) ---- */
+    .pod.main {
+      width: 236px;
+      padding: 10px 16px 14px;
+      border-color: rgba(255, 43, 214, 0.28);
+      box-shadow: 0 0 34px rgba(255, 43, 214, 0.16);
+    }
+    .pod.main::before, .pod.main::after { border-color: var(--magenta); }
+    .pod.main .pod-l { color: rgba(255, 154, 233, 0.9); text-align: center; }
+
+    .gauge-wrap { position: relative; width: 100%; }
+    .gauge { display: block; width: 100%; height: auto; overflow: visible; }
+    .gauge-track { fill: none; stroke: rgba(255, 255, 255, 0.09); stroke-width: 9; stroke-linecap: round; }
+    .gauge-ticks { fill: none; stroke: rgba(155, 232, 255, 0.30); stroke-width: 13; stroke-dasharray: 1.5 12; }
+    .gauge-arc {
+      fill: none;
+      stroke: url(#gaugeGrad);
+      stroke-width: 9;
+      stroke-linecap: round;
+      stroke-dasharray: 405.3;
+      stroke-dashoffset: 405.3;
+      filter: url(#gaugeGlow);
+      transition: stroke-dashoffset 0.1s linear;
+    }
+    .gauge-hub {
+      position: absolute;
+      left: 0; right: 0;
+      top: 46%;
+      transform: translateY(-50%);
+      text-align: center;
+    }
+    .gauge-hub .pod-v {
+      justify-content: center;
+      font-size: 52px;
+      text-shadow: 0 0 26px rgba(255, 43, 214, 0.75);
+    }
+    .gauge-hub .pod-v i { color: rgba(255, 154, 233, 0.9); font-size: 13px; }
+    .gauge-hub .pod-l { margin-top: 6px; }
+
+    /* Redline styling once the terrain is near full height. */
+    .pod.main.hot { border-color: rgba(255, 240, 255, 0.5); box-shadow: 0 0 46px rgba(255, 43, 214, 0.4); }
+    .pod.main.hot .gauge-hub .pod-v { color: #fff0ff; text-shadow: 0 0 34px rgba(255, 240, 255, 0.95); }
+
+    /* ================= Footer stats ================= */
+    .hud-foot {
+      position: absolute;
+      right: 20px;
+      bottom: 84px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      text-align: right;
+    }
+    .hud-foot div {
+      font-size: 9.5px;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      color: rgba(200, 215, 245, 0.45);
+    }
+    .hud-foot b {
+      display: block;
+      font-family: var(--num);
+      font-variant-numeric: tabular-nums;
+      font-size: 19px;
+      font-weight: 600;
+      letter-spacing: 0;
+      color: #eaf4ff;
+      text-shadow: 0 0 12px rgba(0, 246, 255, 0.35);
+    }
+
+    /* ================= Connection overlay ================= */
     #overlay {
       position: fixed;
       inset: 0;
       z-index: 20;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: rgba(5, 4, 14, 0.55);
+      gap: 16px;
+      background: radial-gradient(ellipse at center, rgba(9, 4, 26, 0.35), rgba(4, 2, 12, 0.82));
       color: #ffe9ff;
-      font-size: 20px;
-      letter-spacing: 0.05em;
-      text-shadow: 0 0 12px rgba(255, 43, 214, 0.6);
-      transition: opacity 0.4s ease;
+      transition: opacity 0.5s ease;
       pointer-events: none;
     }
     #overlay.hidden { opacity: 0; }
+    #overlay-text {
+      font-size: 13px;
+      letter-spacing: 0.34em;
+      text-transform: uppercase;
+      text-shadow: 0 0 16px rgba(255, 43, 214, 0.7);
+    }
+    .scanner {
+      width: 190px;
+      height: 2px;
+      background: rgba(255, 255, 255, 0.12);
+      overflow: hidden;
+      position: relative;
+    }
+    .scanner::after {
+      content: "";
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 45%;
+      background: linear-gradient(90deg, transparent, var(--magenta), transparent);
+      animation: sweep 1.6s ease-in-out infinite;
+    }
+    @keyframes sweep {
+      0% { left: -45%; }
+      100% { left: 100%; }
+    }
 
     .hint {
       position: fixed;
-      bottom: 16px;
-      left: 0;
-      right: 0;
+      top: 22px;
+      right: 20px;
       z-index: 10;
-      text-align: center;
-      color: rgba(255, 220, 255, 0.6);
-      font-size: 13px;
-      letter-spacing: 0.04em;
+      color: rgba(255, 220, 255, 0.4);
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
       pointer-events: none;
-      text-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+    }
+
+    @media (max-width: 820px) {
+      .pod.side { display: none; }
+      .curve { bottom: 196px; width: 88vw; }
+      .hud-foot { bottom: 84px; }
     }
   </style>
 </head>
 <body>
+  <!-- ============ Windowed (2D) HUD ============ -->
   <div id="hud">
-    <div class="row"><span class="label">Speed</span><span class="value" id="hud-speed">0.0</span><span class="unit">km/h</span></div>
-    <div class="row"><span class="label">Heart</span><span class="value" id="hud-hr">—</span><span class="unit">bpm</span></div>
-    <div class="row"><span class="label">Power</span><span class="value" id="hud-intensity">0%</span></div>
-    <div class="equipment" id="hud-equipment">—</div>
+    <div class="hud-top">
+      <span class="lamp" id="lamp"></span>
+      <span class="dev" id="v-device">No device</span>
+      <span class="chip" id="v-equipment">—</span>
+    </div>
+
+    <div class="curve">
+      <canvas id="spark"></canvas>
+      <div class="curve-cap">
+        <span>Power curve</span>
+        <span class="curve-note">terrain profile · last 2 min</span>
+      </div>
+    </div>
+
+    <div class="dock">
+      <div class="pod side">
+        <div class="pod-l">Speed</div>
+        <div class="pod-v"><span id="v-speed">0.0</span><i>km/h</i></div>
+        <div class="bar"><span id="bar-speed"></span></div>
+        <div class="pod-sub"><b id="v-cadence">—</b> rpm</div>
+      </div>
+
+      <div class="pod main" id="pod-power">
+        <div class="gauge-wrap">
+          <svg class="gauge" viewBox="0 0 220 200" aria-hidden="true">
+            <defs>
+              <linearGradient id="gaugeGrad" x1="0" y1="1" x2="1" y2="0">
+                <stop offset="0%" stop-color="#00f6ff" />
+                <stop offset="55%" stop-color="#ff2bd6" />
+                <stop offset="100%" stop-color="#fff0ff" />
+              </linearGradient>
+              <filter id="gaugeGlow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="4" result="b" />
+                <feMerge>
+                  <feMergeNode in="b" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            <!-- 270 deg arc, opening at the bottom. Length = 2*pi*86*0.75 = 405.3 -->
+            <path class="gauge-track" d="M 49.2 170.8 A 86 86 0 1 1 170.8 170.8" />
+            <path class="gauge-ticks" d="M 49.2 170.8 A 86 86 0 1 1 170.8 170.8" />
+            <path class="gauge-arc" id="gauge-arc" d="M 49.2 170.8 A 86 86 0 1 1 170.8 170.8" />
+          </svg>
+          <div class="gauge-hub">
+            <div class="pod-v"><span id="v-power">0</span><i>W</i></div>
+            <div class="pod-l">Power</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pod side">
+        <div class="pod-l">Heart</div>
+        <div class="pod-v"><span id="v-hr">—</span><i>bpm</i></div>
+        <div class="bar heat"><span id="bar-hr"></span></div>
+        <div class="pod-sub"><span class="heart" id="heart">&#9829;</span> live</div>
+      </div>
+    </div>
+
+    <div class="hud-foot">
+      <div><b id="v-distance">—</b>distance</div>
+      <div><b id="v-time">—:—</b>elapsed</div>
+      <div><b id="v-energy">—</b>kcal</div>
+    </div>
   </div>
 
-  <div id="overlay">Connecting to fitness device…</div>
-  <div class="hint">Drag to look around · scroll to ride faster</div>
+  <div id="overlay">
+    <div class="scanner"></div>
+    <div id="overlay-text">Connecting to fitness device</div>
+  </div>
+  <div class="hint">Drag to look around</div>
 
-  <a-scene renderer="antialias:false" fog="type: linear; color: #000; near: 8; far: 160">
+  <!-- ============ Scene ============ -->
+  <a-scene ride-tick renderer="antialias: true; colorManagement: true"
+           fog="type: linear; color: #05040e; near: 10; far: 210">
     <a-sky color="#0b0620"></a-sky>
 
     <a-entity id="landscape" ride-landscape="speed: 12"></a-entity>
 
     <a-entity id="rig">
-      <a-camera id="cam" position="0 2.2 0" look-controls="enabled: true"></a-camera>
+      <a-camera id="cam" position="0 2.2 0" look-controls="enabled: true" wasd-controls="enabled: false"></a-camera>
 
-      <a-entity id="hud" ride-hud></a-entity>
+      <!-- In-scene HUD: hidden unless a real WebXR session is running. -->
+      <a-entity id="vr-hud" ride-hud></a-entity>
     </a-entity>
   </a-scene>
 

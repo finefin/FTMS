@@ -50,6 +50,7 @@ and the dashboard updates live as data arrives.
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/` | Serve the dashboard |
+| `GET` | `/ride` | Serve the 3D / VR ride view |
 | `GET` | `/api/status` | Connection and equipment status as JSON |
 | `GET` | `/api/devices` | Scan (5s) and list FTMS devices |
 | `GET` | `/api/connect?id=<deviceId>` | Connect to a device |
@@ -122,3 +123,84 @@ if (devices.length > 0) {
 - `npm run dev` — run via `tsx` (no build step)
 - `npm run build` — compile to `dist/`
 - `npm start` — run compiled output
+
+## Project analysis
+
+A short review of the codebase as it stands (~3.2k lines: ~1.7k TypeScript, ~1.5k browser JS/HTML).
+
+### Architecture
+
+Cleanly layered, one direction of dependency:
+
+```
+ble/connection.ts   raw GATT: scan, connect, subscribe, read, write
+      ↓
+ftms/               protocol: constants → decoder/encoder → FTMSClient (EventEmitter)
+      ↓
+server/             http.ts (Hono REST + static) and ws.ts (broadcast) — both take a client
+      ↓
+public/             two independent front-ends over the same /ws stream
+```
+
+`main.ts` is the only place that wires the pieces together; `index.ts` re-exports the
+same modules as a library, so the protocol layer is usable without the server. The
+decoders are straightforward flag-walk parsers over the FTMS bit fields, and the
+encoders return plain `Buffer`s — both are pure functions with no BLE dependency,
+which is the main reason the layering holds.
+
+`WsServer` caches the last `data` and `state` message and replays them to each new
+client, so a browser that connects mid-workout renders immediately instead of waiting
+for the next notification.
+
+### Two front-ends
+
+- `/` — dashboard (`index.html`, single file): status bar, scan/connect, metric grid,
+  Chart.js live plot. Equipment-aware: metric labels and chart series are chosen from
+  the `equipment` field in the WS message.
+- `/ride` — VR/3D ride view (`ride.html` + three scripts). An A-Frame synthwave world
+  where live telemetry drives the scene: power → mountain height (the canyon *is* a
+  scrolling graph of your power curve, one row per sample), speed → world scroll rate,
+  heart rate → sun-glow pulse. `ride.js` owns the WebSocket and publishes to a global
+  `window.RideState`; `ride-landscape.js` and `ride-hud.js` are A-Frame components that
+  read it in `tick()`. Values are smoothed (`VALUE_SMOOTH`, `SPEED_SMOOTH`) so the world
+  glides between the ~1 Hz BLE samples rather than stepping.
+
+  The canyon scrolls with the classic treadmill trick: rows are fixed in the group's
+  local space and read the sample ring at *integer* offsets, while the group slides
+  forward by the fractional part of a sample. When the fraction wraps, the group snaps
+  back one row-spacing at the same moment every row inherits its far neighbour's
+  height, so motion is seamless and the vertex buffers are only rewritten when the
+  profile actually changes. A full update of the ~6 k wall vertices measures ~0.06 ms.
+
+  Two HUDs, never both at once: a 2D DOM HUD for windowed use (radial power gauge,
+  speed/heart pods, and a sparkline of the same power history the terrain is built
+  from), and an in-scene stereo HUD shown only once a real WebXR session exists.
+  A-Frame also emits `enter-vr` for plain desktop fullscreen, which is *not* immersive,
+  so the presence of `sceneEl.xrSession` is what gates the switch.
+
+### Findings
+
+**Platform.** The BLE layer is Windows-only in practice. `src/ble/connection.ts`
+imports `noble-winrt` unconditionally — there is no runtime branch to classic `noble`,
+contrary to the Requirements section above. On macOS/Linux the import itself is the
+failure point, so `npm run dev` cannot connect there. Either add the fallback or
+narrow the documented support.
+
+**Unwired code.** `setSpinDownControl` and `setLatitudeAndLongitude` are implemented
+in `ftms/encoder.ts` but exposed neither on `FTMSClient` nor from `index.ts`; the
+`equipment/*` snapshot helpers are exported for library users but unused by the app,
+and cover four of the six equipment types. (The dead `ride-tick` and `hud-punch`
+components and the duplicate `id="hud"` in the ride view have since been fixed.)
+
+**API shape.** Every REST route is a `GET`, including the state-changing
+`/api/connect`, `/api/control`, and `/api/disconnect`, and there is no auth. Fine for
+a localhost tool; not safe to expose on a LAN as-is. `createApp` also takes a `ws`
+parameter it never uses.
+
+**Types.** `DiscoveredDevice.serviceData` is declared `Buffer` but is assigned
+`advertisement.serviceUuids` (a string array). The BLE layer's `any` aliases for the
+noble types keep the compiler quiet about it.
+
+**Tooling.** No tests, linter, or CI. The decoders are pure functions over `Buffer`s —
+the easiest thing in the project to test, and the place where a spec misreading would
+be silent.
