@@ -38,13 +38,13 @@
   // rather than stretching it.
   var ARC_XR = 0.70;         // ~40 deg
   var ARC_FLAT = 1.05;       // ~60 deg
-  var DROP_XR = 0.24;        // how far below eye level the panel centre sits
-  var DROP_FLAT = 0.30;
+  var DROP_XR = 1;        // how far below eye level the panel centre sits
+  var DROP_FLAT = 1;
 
   // Lazy follow: the panel holds still while you glance around and only
   // catches up once you turn past the dead zone, so it is always findable
   // without being welded to your face.
-  var FOLLOW_DEADZONE = 0.30;  // rad (~17 deg) before the panel starts turning
+  var FOLLOW_DEADZONE = 0.10;  // rad (~17 deg) before the panel starts turning
   var FOLLOW_SETTLE = 0.02;    // rad at which it stops again
   var YAW_FOLLOW = 3.5;
   var POS_FOLLOW = 4.0;
