@@ -22,6 +22,8 @@
   var SPARK_HZ = 4;
   var SPARK_LEN = SPARK_WINDOW * SPARK_HZ;
 
+  // Exported on RideState so the VR HUD can draw the same trace.
+
   var state = {
     speed: 0,
     heartRate: null,
@@ -37,9 +39,15 @@
     demo: false
   };
 
-  // Shared state read by the in-scene VR HUD component (ride-hud.js).
+  // Shared state read by the in-scene VR HUD component (ride-hud.js). The VR
+  // HUD draws the same design as the DOM HUD, so it needs the same inputs —
+  // including the raw power history behind the sparkline.
   window.RideState = {
-    speed: 0, heartRate: null, power: 0, value: 0, equipment: null
+    speed: 0, heartRate: null, power: 0, value: 0, equipment: null,
+    cadence: null, distance: null, elapsed: null, energy: null,
+    device: null, equipmentLabel: null, connection: 'idle', demo: false,
+    powerMax: 400, speedMax: 60, hrMax: 200,
+    spark: null, sparkFilled: 0, sparkLen: 0
   };
 
   // Displayed values, eased toward the real ones so the readouts glide.
@@ -249,11 +257,28 @@
 
     drawSpark();
 
-    window.RideState.speed = state.speed;
-    window.RideState.heartRate = state.heartRate;
-    window.RideState.power = state.power;
-    window.RideState.value = state.value;
-    window.RideState.equipment = state.equipment;
+    publishState();
+  }
+
+  // Mirror everything the VR HUD renders from.
+  function publishState() {
+    var rs = window.RideState;
+    rs.speed = state.speed;
+    rs.heartRate = state.heartRate;
+    rs.power = state.power;
+    rs.value = state.value;
+    rs.equipment = state.equipment;
+    rs.equipmentLabel = EQUIPMENT_LABELS[state.equipment] || null;
+    rs.cadence = state.cadence;
+    rs.distance = state.distance;
+    rs.elapsed = state.elapsed;
+    rs.energy = state.energy;
+    rs.device = state.device;
+    rs.connection = state.connection;
+    rs.demo = state.demo;
+    rs.spark = spark;
+    rs.sparkFilled = sparkFilled;
+    rs.sparkLen = SPARK_LEN;
   }
 
   function pushToScene() {
@@ -287,6 +312,7 @@
     if (v != null) state.value = v;
 
     pushSpark(state.power || 0);
+    publishState();
     pushToScene();
   }
 

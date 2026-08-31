@@ -170,13 +170,37 @@ for the next notification.
   forward by the fractional part of a sample. When the fraction wraps, the group snaps
   back one row-spacing at the same moment every row inherits its far neighbour's
   height, so motion is seamless and the vertex buffers are only rewritten when the
-  profile actually changes. A full update of the ~6 k wall vertices measures ~0.06 ms.
+  profile actually changes (or when the sample index advances).
 
-  Two HUDs, never both at once: a 2D DOM HUD for windowed use (radial power gauge,
-  speed/heart pods, and a sparkline of the same power history the terrain is built
-  from), and an in-scene stereo HUD shown only once a real WebXR session exists.
-  A-Frame also emits `enter-vr` for plain desktop fullscreen, which is *not* immersive,
-  so the presence of `sceneEl.xrSession` is what gates the switch.
+  Two details exist specifically to make the motion *visible*, and both matter:
+
+  - The walls are built as two separate sides starting at the corridor edge, with no
+    geometry across the corridor. Lines lying flat on the ground and running along the
+    travel axis cannot show motion — a line parallel to `z`, translated along `z`,
+    projects to the same screen line at any speed — so they read as a permanently
+    static grid. The ground grid is the only floor; its rungs cross the travel axis
+    and therefore do scroll visibly.
+  - Every 6th sample row is drawn as a brightened marker rung, keyed to the *absolute*
+    sample index so it travels one row toward the player per sample. Without it, a
+    constant power output produces a uniform canyon, and rigidly translating a uniform
+    canyon looks completely still.
+
+  Two HUDs, never both at once, sharing one design — radial power gauge, speed and
+  heart pods, corner brackets, and a sparkline of the same power history the terrain
+  is built from. The windowed one is DOM/CSS; the VR one draws that design to a 2D
+  canvas mapped onto a panel curved around the viewer (~40° of wrap at 2.2 m), which
+  reproduces the arcs, gradients and glow exactly in a single draw call. Both read
+  from `window.RideState`, which `ride.js` publishes on every update.
+
+  The VR panel repaints at ~15 Hz rather than headset framerate — the readouts and
+  heartbeat do not need more, and each repaint re-uploads a ~2.7 MB texture. A repaint
+  costs ~0.54 ms of canvas work; ticks in between are effectively free. `REPAINT_MS`
+  in `ride-hud.js` is the knob if a standalone headset needs the texture bandwidth
+  back.
+
+  The VR HUD is shown only once a real WebXR session exists. A-Frame also emits
+  `enter-vr` for plain desktop fullscreen, which is *not* immersive, so the presence of
+  `sceneEl.xrSession` is what gates the switch.
 
 ### Findings
 
