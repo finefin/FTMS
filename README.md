@@ -198,11 +198,24 @@ for the next notification.
   in `ride-hud.js` is the knob if a standalone headset needs the texture bandwidth
   back.
 
-  The VR HUD is shown only once a real WebXR session exists. A-Frame also emits
-  `enter-vr` for plain desktop fullscreen, which is *not* immersive, so the presence of
-  `sceneEl.xrSession` is what gates the switch. That check is re-run every tick rather
-  than only on the events, so a mode change the events miss still resolves on the next
-  frame instead of leaving the HUD hidden for the whole session.
+  The in-scene HUD takes over for **both** immersive VR and A-Frame's desktop
+  fullscreen — anything that puts the scene into `vr-mode`. Fullscreen is not a
+  cosmetic case: with no headset connected A-Frame calls `requestFullscreen()` on the
+  *canvas element itself*, and a fullscreen element renders only its own descendants.
+  The DOM HUD is a sibling of `<a-scene>`, so the browser stops drawing it entirely.
+  The in-scene panel lives inside the canvas and is the only HUD that can survive
+  there. Gating it on `sceneEl.xrSession` — as an earlier version did, to keep
+  fullscreen on the DOM HUD — meant no HUD at all on a desktop without a headset.
+
+  The check is re-run every tick rather than only on the enter/exit events, so a mode
+  change the events miss still resolves on the next frame instead of leaving the HUD
+  hidden for the whole session.
+
+  The panel's wrap angle depends on which mode it is in: ~40° in a headset, where that
+  sits comfortably inside the field of view, and ~60° on a flat fullscreen monitor,
+  where the headset-sized panel reads as a small floating card. Height is derived from
+  the arc length in both cases so the curve always matches the canvas aspect rather
+  than stretching it.
 
   The panel is anchored to the **head**, not to the rig. A-Frame requires the
   `local-floor` reference space, which puts the origin on the floor at the centre of

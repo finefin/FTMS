@@ -418,9 +418,15 @@
   // by the in-scene HUD, so hide it there rather than showing both.
   var vrScene = null;
 
-  function isImmersive() {
+  // Immersive XR, or A-Frame's desktop fullscreen. In fullscreen A-Frame
+  // hands the canvas element itself to requestFullscreen(), and a fullscreen
+  // element renders only its descendants — this HUD is a sibling of
+  // <a-scene>, so it cannot be drawn there at all. Either way the in-scene
+  // panel takes over.
+  function isPresenting() {
     if (!vrScene) return false;
     if (vrScene.xrSession) return true;
+    if (vrScene.is && (vrScene.is('vr-mode') || vrScene.is('ar-mode'))) return true;
     var r = vrScene.renderer;
     return !!(r && r.xr && r.xr.isPresenting);
   }
@@ -428,7 +434,7 @@
   // Called from the render loop as well as from the events, so a mode change
   // that the events miss still resolves on the next frame.
   function syncVrClass() {
-    var want = isImmersive();
+    var want = isPresenting();
     if (want !== document.body.classList.contains('in-vr')) {
       document.body.classList.toggle('in-vr', want);
     }

@@ -4,10 +4,15 @@
   // In-scene (stereo) HUD for immersive VR only.
   //
   // In windowed mode the DOM HUD in ride.html is the interface and this
-  // entity stays hidden — showing both would double up. It is switched on
-  // only once a real WebXR session exists (A-Frame also emits `enter-vr`
-  // for desktop fullscreen, which is *not* immersive, so the session is
-  // what we test).
+  // entity stays hidden — showing both would double up.
+  //
+  // It takes over for BOTH immersive VR and A-Frame's desktop fullscreen.
+  // Fullscreen is not merely a cosmetic case: with no headset connected
+  // A-Frame calls requestFullscreen() on the *canvas element itself*, and a
+  // fullscreen element renders only its own descendants. The DOM HUD is a
+  // sibling of <a-scene>, so the browser stops drawing it completely. This
+  // panel lives inside the canvas, so it is the only HUD that can survive
+  // there — gating it on an XR session meant no HUD at all in fullscreen.
   //
   // The design is the same as the DOM HUD — radial power gauge, speed and
   // heart pods, power-curve sparkline, neon corner brackets — drawn to a
@@ -24,10 +29,17 @@
   // position is therefore only in front of you if you happen to be stood on the
   // origin looking down -Z; otherwise it sits off to one side or behind you.
   var PANEL_RADIUS = 2.0;    // distance from the viewer
-  var PANEL_ARC = 0.70;      // radians of wrap (~40 deg)
-  var PANEL_HEIGHT = 0.63;
-  var PANEL_DROP = 0.24;     // how far below eye level the panel centre sits
   var PANEL_SEGMENTS = 24;
+
+  // Wrap angle differs by mode. In a headset ~40 deg sits comfortably inside
+  // the field of view; on a flat fullscreen monitor that same panel reads as
+  // a small floating card, so it opens up to ~60 deg there. Height is derived
+  // from the arc length so the panel always matches the canvas aspect exactly
+  // rather than stretching it.
+  var ARC_XR = 0.70;         // ~40 deg
+  var ARC_FLAT = 1.05;       // ~60 deg
+  var DROP_XR = 0.24;        // how far below eye level the panel centre sits
+  var DROP_FLAT = 0.30;
 
   // Lazy follow: the panel holds still while you glance around and only
   // catches up once you turn past the dead zone, so it is always findable
@@ -460,15 +472,16 @@
       this._tex.minFilter = THREE.LinearFilter;
 
       this._mesh = new THREE.Mesh(
-        makeCurvedPanel(PANEL_RADIUS, PANEL_ARC, PANEL_HEIGHT, PANEL_SEGMENTS),
+        makeCurvedPanel(PANEL_RADIUS, ARC_XR, PANEL_RADIUS * ARC_XR / (CW / CH), PANEL_SEGMENTS),
         new THREE.MeshBasicMaterial({
           map: this._tex, transparent: true, side: THREE.DoubleSide,
           depthWrite: false, fog: false
         })
       );
-      this._mesh.position.y = -PANEL_DROP;
       this._mesh.renderOrder = 10;
+      this._arc = null;
       this.el.object3D.add(this._mesh);
+      this.applyMode();
 
       this._last = 0;
       this._beat = 0;
@@ -488,7 +501,7 @@
       var scene = this.el.sceneEl;
       this._onEnter = function () {
         self._snap = true;   // drop the panel straight in front on entry
-        self.setVisible(self.isImmersive());
+        self.setVisible(self.isPresenting());
       };
       this._onExit = function () { self.setVisible(self.data.forceVisible); };
       scene.addEventListener('enter-vr', this._onEnter);
@@ -506,14 +519,38 @@
       if (this._tex) this._tex.dispose();
     },
 
-    // A-Frame reports `vr-mode` for plain desktop fullscreen too, so the
-    // presence of an XR session is the only reliable "really in a headset".
-    isImmersive: function () {
+    // True for immersive XR *and* for A-Frame's desktop-fullscreen "vr-mode",
+    // both of which hand the canvas the whole screen and take the DOM HUD
+    // out of play.
+    isPresenting: function () {
+      var scene = this.el.sceneEl;
+      if (!scene) return false;
+      if (scene.xrSession) return true;
+      if (scene.is && (scene.is('vr-mode') || scene.is('ar-mode'))) return true;
+      var r = scene.renderer;
+      return !!(r && r.xr && r.xr.isPresenting);
+    },
+
+    // True only for a genuine headset session, as opposed to A-Frame's
+    // desktop-fullscreen "vr-mode".
+    isXR: function () {
       var scene = this.el.sceneEl;
       if (!scene) return false;
       if (scene.xrSession) return true;
       var r = scene.renderer;
       return !!(r && r.xr && r.xr.isPresenting);
+    },
+
+    // Swap the panel between headset and flat-screen proportions.
+    applyMode: function () {
+      var arc = this.isXR() ? ARC_XR : ARC_FLAT;
+      if (arc === this._arc) return;
+      this._arc = arc;
+      var height = PANEL_RADIUS * arc / (CW / CH);
+      var old = this._mesh.geometry;
+      this._mesh.geometry = makeCurvedPanel(PANEL_RADIUS, arc, height, PANEL_SEGMENTS);
+      if (old) old.dispose();
+      this._mesh.position.y = -(this.isXR() ? DROP_XR : DROP_FLAT);
     },
 
     setVisible: function (v) {
@@ -613,9 +650,10 @@
       // enter-vr/exit-vr events alone: if the event ever fires before the
       // session is registered, a one-shot check would leave the HUD hidden
       // for the whole session with no way to recover.
-      var should = this.data.forceVisible || this.isImmersive();
+      var should = this.data.forceVisible || this.isPresenting();
       if (should !== this._visible) this.setVisible(should);
       if (!this._visible) return;
+      this.applyMode();
 
       var dt = (timeDelta || 16) / 1000;
       this.follow(dt);
