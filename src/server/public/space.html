@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>FTMS Flight</title>
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+  <style>
+    :root {
+      --hud: #7fe8ff;
+      --hud-dim: rgba(127, 232, 255, 0.55);
+      --amber: #ffb347;
+      --ok: #55ffa8;
+      --warn: #ff5d6c;
+      --ink: #02040a;
+      --glass: rgba(6, 14, 28, 0.55);
+      --line: rgba(127, 232, 255, 0.22);
+      --num: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+      --ui: "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ink); }
+    body { font-family: var(--ui); }
+
+    #hud {
+      position: fixed; inset: 0; z-index: 10;
+      pointer-events: none; color: var(--hud);
+      opacity: 0; transition: opacity 0.6s ease;
+    }
+    #hud.visible { opacity: 1; }
+
+    /* In a headset the in-scene panel takes over. */
+    body.in-vr #hud, body.in-vr #boot { display: none !important; }
+
+    /* Canopy: vignette + faint grid, so the frame reads as glass. */
+    #hud::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(ellipse at 50% 50%, transparent 52%, rgba(1,4,10,0.72) 100%);
+    }
+
+    .panel {
+      position: absolute;
+      background: var(--glass);
+      border: 1px solid var(--line);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      padding: 10px 14px;
+    }
+    /* Cockpit corner ticks */
+    .panel::before, .panel::after {
+      content: ""; position: absolute; width: 10px; height: 10px;
+      border: 1px solid var(--hud); opacity: 0.8;
+    }
+    .panel::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+    .panel::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+
+    .lbl {
+      font-size: 9px; letter-spacing: 0.28em; text-transform: uppercase;
+      color: var(--hud-dim);
+    }
+    .val {
+      font-family: var(--num); font-variant-numeric: tabular-nums;
+      font-size: 30px; font-weight: 600; line-height: 1.05; color: #eaf9ff;
+      text-shadow: 0 0 14px rgba(127,232,255,0.45);
+    }
+    .val small { font-size: 12px; font-weight: 500; color: var(--hud-dim); margin-left: 4px; }
+    .sub { font-family: var(--num); font-size: 11px; color: var(--hud-dim); margin-top: 3px; }
+
+    /* ---- top bar ---- */
+    #top {
+      top: 0; left: 0; right: 0; display: flex; align-items: center;
+      justify-content: space-between; padding: 10px 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(to bottom, rgba(4,10,20,0.75), transparent);
+      position: absolute;
+    }
+    #top .seg { display: flex; align-items: center; gap: 9px; font-size: 10px;
+      letter-spacing: 0.2em; text-transform: uppercase; }
+    .lamp { width: 7px; height: 7px; border-radius: 50%; background: #555;
+      box-shadow: 0 0 8px currentColor; }
+    .lamp-connected { background: var(--ok); color: var(--ok); }
+    .lamp-demo { background: var(--amber); color: var(--amber); }
+    .lamp-error { background: var(--warn); color: var(--warn); }
+    .lamp-idle, .lamp-scanning, .lamp-connecting { background: var(--amber); color: var(--amber);
+      animation: blink 1s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+    #mission { color: var(--amber); letter-spacing: 0.3em; }
+
+    /* ---- side gauges ---- */
+    #velocity { left: 20px; top: 50%; transform: translateY(-50%); min-width: 190px; }
+    #thrust  { right: 20px; top: 50%; transform: translateY(-50%); min-width: 160px; text-align: right; }
+    #thrust .val { text-shadow: 0 0 14px rgba(255,179,71,0.45); }
+
+    .bar { position: relative; height: 4px; margin-top: 9px;
+      background: rgba(127,232,255,0.14); overflow: hidden; }
+    .bar span { position: absolute; inset: 0 auto 0 0; width: 0%;
+      background: var(--hud); box-shadow: 0 0 10px var(--hud); transition: width .15s linear; }
+    #thrust .bar span { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+
+    /* ---- reticle ---- */
+    #reticle {
+      position: absolute; left: 50%; top: 50%; width: 120px; height: 120px;
+      transform: translate(-50%,-50%); opacity: 0.75;
+    }
+    #reticle div { position: absolute; background: var(--hud); box-shadow: 0 0 6px var(--hud); }
+    .rt-h { width: 22px; height: 1px; top: 50%; }
+    .rt-v { width: 1px; height: 22px; left: 50%; }
+    #reticle .c { width: 3px; height: 3px; left: 50%; top: 50%; transform: translate(-50%,-50%);
+      border-radius: 50%; }
+
+    /* ---- target lock on the Moon ---- */
+    #lock { position: absolute; width: 0; height: 0; display: none; }
+    #lock .br { position: absolute; width: 12px; height: 12px; border: 1px solid var(--amber);
+      box-shadow: 0 0 8px rgba(255,179,71,.7); }
+    #lock .tl { border-right: 0; border-bottom: 0; }
+    #lock .tr { border-left: 0; border-bottom: 0; }
+    #lock .bl { border-right: 0; border-top: 0; }
+    #lock .brr { border-left: 0; border-top: 0; }
+    #lock .tag { position: absolute; white-space: nowrap; font-family: var(--num);
+      font-size: 10px; color: var(--amber); text-shadow: 0 0 8px rgba(255,179,71,.8); }
+
+    /* ---- nav strip ---- */
+    #nav { left: 50%; bottom: 22px; transform: translateX(-50%); width: min(760px, 84vw); }
+    #nav .row { display: flex; justify-content: space-between; align-items: baseline; }
+    #track { position: relative; height: 2px; margin: 14px 0 10px;
+      background: rgba(127,232,255,0.20); }
+    #track .done { position: absolute; inset: 0 auto 0 0; width: 0%; background: var(--hud);
+      box-shadow: 0 0 10px var(--hud); }
+    #track .ship { position: absolute; top: 50%; left: 0; width: 0; height: 0;
+      transform: translate(-50%,-50%); }
+    #track .ship::after { content: "▲"; position: absolute; transform: translate(-50%,-64%) rotate(90deg);
+      color: #fff; font-size: 12px; text-shadow: 0 0 8px var(--hud); }
+    .node { position: absolute; top: 50%; width: 7px; height: 7px; border-radius: 50%;
+      transform: translate(-50%,-50%); border: 1px solid var(--hud); background: var(--ink); }
+    .node.start { left: 0; background: var(--hud); }
+    .node.end { left: 100%; border-color: var(--amber); }
+    #nav .ends { display: flex; justify-content: space-between; font-size: 9px;
+      letter-spacing: 0.24em; text-transform: uppercase; }
+    #nav .ends .to { color: var(--amber); }
+
+    /* ---- vitals ---- */
+    #vitals { right: 20px; bottom: 22px; text-align: right; min-width: 130px; }
+    #heart { color: var(--warn); font-size: 12px; display: inline-block; }
+    #heart.beating { animation: beat 1s infinite ease-out; }
+    @keyframes beat { 0%{transform:scale(1)} 12%{transform:scale(1.4)} 26%{transform:scale(1.05)}
+      38%{transform:scale(1.2)} 60%,100%{transform:scale(1)} }
+
+    /* ---- arrival banner ---- */
+    #arrived {
+      position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
+      text-align: center; display: none;
+    }
+    #arrived.show { display: block; }
+    #arrived .big { font-size: 22px; letter-spacing: 0.42em; color: var(--ok);
+      text-shadow: 0 0 22px rgba(85,255,168,0.7); text-transform: uppercase; }
+    #arrived .small { margin-top: 8px; font-size: 10px; letter-spacing: 0.28em;
+      color: var(--hud-dim); text-transform: uppercase; }
+
+    /* ---- boot overlay ---- */
+    #boot {
+      position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px;
+      background: radial-gradient(ellipse at center, rgba(4,10,22,.4), rgba(1,3,8,.9));
+      color: var(--hud); transition: opacity .6s ease; pointer-events: none;
+    }
+    #boot.hidden { opacity: 0; }
+    #boot .t { font-size: 12px; letter-spacing: 0.36em; text-transform: uppercase; }
+    .scan { width: 190px; height: 2px; background: rgba(127,232,255,.15);
+      position: relative; overflow: hidden; }
+    .scan::after { content: ""; position: absolute; top: 0; bottom: 0; width: 45%;
+      background: linear-gradient(90deg, transparent, var(--hud), transparent);
+      animation: sweep 1.5s ease-in-out infinite; }
+    @keyframes sweep { 0%{left:-45%} 100%{left:100%} }
+
+    .hint { position: fixed; left: 0; right: 0; bottom: 6px; text-align: center;
+      font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase;
+      color: rgba(127,232,255,0.34); z-index: 10; pointer-events: none; }
+
+    @media (max-width: 860px) {
+      #velocity, #thrust { display: none; }
+      #nav { width: 90vw; }
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div id="top">
+      <div class="seg"><span class="lamp" id="lamp"></span><span id="v-device">No device</span></div>
+      <div class="seg" id="mission">SOL · LEG 01 · EARTH → MOON</div>
+      <div class="seg"><span id="v-clock">00:00</span></div>
+    </div>
+
+    <div id="reticle">
+      <div class="rt-h" style="left:0"></div>
+      <div class="rt-h" style="right:0"></div>
+      <div class="rt-v" style="top:0"></div>
+      <div class="rt-v" style="bottom:0"></div>
+      <div class="c"></div>
+    </div>
+
+    <div id="lock">
+      <div class="br tl"></div><div class="br tr"></div>
+      <div class="br bl"></div><div class="br brr"></div>
+      <div class="tag" id="lock-tag">MOON</div>
+    </div>
+
+    <div class="panel" id="velocity">
+      <div class="lbl">Velocity</div>
+      <div class="val"><span id="v-kms">0</span><small>km/s</small></div>
+      <div class="bar"><span id="bar-speed"></span></div>
+      <div class="sub"><span id="v-kmh">0</span> km/h · <span id="v-c">0.000</span>% c</div>
+      <div class="sub"><span id="v-legspeed">0.0</span> km/h at the pedals</div>
+    </div>
+
+    <div class="panel" id="thrust">
+      <div class="lbl">Thrust</div>
+      <div class="val"><span id="v-power">0</span><small>W</small></div>
+      <div class="bar"><span id="bar-thrust"></span></div>
+      <div class="sub"><span id="v-cadence">—</span> rpm</div>
+    </div>
+
+    <div class="panel" id="nav">
+      <div class="row">
+        <span class="lbl">Navigation</span>
+        <span class="lbl"><span id="v-progress">0</span>% complete</span>
+      </div>
+      <div id="track">
+        <div class="done" id="track-done"></div>
+        <div class="node start"></div>
+        <div class="node end"></div>
+        <div class="ship" id="track-ship"></div>
+      </div>
+      <div class="ends">
+        <span>Earth</span>
+        <span class="sub" style="margin:0"><span id="v-remaining">—</span> km remaining · ETA <span id="v-eta">—</span></span>
+        <span class="to">Moon</span>
+      </div>
+    </div>
+
+    <div class="panel" id="vitals">
+      <div class="lbl">Crew</div>
+      <div class="val"><span id="v-hr">—</span><small>bpm</small></div>
+      <div class="sub"><span id="heart">&#9829;</span> nominal</div>
+    </div>
+
+    <div id="arrived">
+      <div class="big">Lunar orbit achieved</div>
+      <div class="small">384,400 km from Earth</div>
+    </div>
+  </div>
+
+  <div id="boot">
+    <div class="scan"></div>
+    <div class="t" id="boot-text">Linking flight computer</div>
+  </div>
+  <div class="hint">Drag to look around · look back for Earth</div>
+
+  <a-scene space-tick
+           light="defaultLightsEnabled: false"
+           renderer="antialias: true; colorManagement: true"
+           background="color: #02040a">
+    <a-entity id="system" space-scene></a-entity>
+
+    <a-entity id="rig">
+      <a-camera id="cam" position="0 0 0" far="20000"
+                look-controls="enabled: true" wasd-controls="enabled: false"></a-camera>
+      <a-entity id="vr-hud" space-hud></a-entity>
+    </a-entity>
+  </a-scene>
+
+  <script src="space-scene.js"></script>
+  <script src="space-hud.js"></script>
+  <script src="space.js"></script>
+</body>
+</html>

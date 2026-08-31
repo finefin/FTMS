@@ -88,7 +88,8 @@ If it still will not connect, in likely order:
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/` | Serve the dashboard |
-| `GET` | `/ride` | Serve the 3D / VR ride view |
+| `GET` | `/ride` | Serve the 3D / VR ride view (synthwave canyon) |
+| `GET` | `/space` | Serve the 3D / VR flight view (Earth → Moon) |
 | `GET` | `/api/status` | Connection and equipment status as JSON |
 | `GET` | `/api/devices` | Scan (5s) and list FTMS devices |
 | `GET` | `/api/connect?id=<deviceId>` | Connect to a device |
@@ -190,7 +191,7 @@ which is the main reason the layering holds.
 client, so a browser that connects mid-workout renders immediately instead of waiting
 for the next notification.
 
-### Two front-ends
+### Front-ends
 
 - `/` — dashboard (`index.html`, single file): status bar, scan/connect, metric grid,
   Chart.js live plot. Equipment-aware: metric labels and chart series are chosen from
@@ -243,6 +244,28 @@ for the next notification.
   `WALL_RIDGE_X`/`WALL_X_HALF` out to match turns the walls into vertical curtains that
   run off the top of the frame, and the power silhouette stops being readable. Keeping
   `WALL_MAXH / WALL_RIDGE_X` near 1.8 keeps it looking like a mountain range.
+
+- `/space` — flight view (`space.html` + three scripts). A transit from Earth to the
+  Moon at **true distances**: 1 world unit = 1000 km, and every radius and separation
+  is the real figure (Earth 6,371 km, Moon 1,737 km, 384,400 km apart). The Moon
+  therefore subtends ~0.55° at departure — its real apparent size from Earth — and
+  grows to ~38° on arrival.
+
+  Speed is real km/h × `WARP_FACTOR` (50,000), so 30 km/h at the pedals is 1.5 million
+  km/h, about 0.14% of light speed, crossing the 359,400 km leg in roughly 15 minutes.
+  Power drives thrust. The ship stays at the origin and the system slides past, which
+  keeps float precision sane over 384,400 km.
+
+  **The warp streaks are the one deliberate lie, and they have to be.** At true scale
+  even 1.5 million km/h is 0.4 units/s, which reads as completely motionless, so streak
+  speed is its own mapping (`STREAK_UNITS_PER_KMH`) tuned purely for legibility.
+  Distance travelled, ETA, progress and the Moon's growth all stay honest. On arrival
+  the transit velocity eases to zero rather than continuing to report a burn that is no
+  longer happening, leaving a slow orbital drift in the starfield.
+
+  The level is a single leg today; body positions are plain kilometre offsets along the
+  flight axis, so adding further legs is a matter of adding bodies and an arrival
+  point.
 
   Two HUDs, never both at once, sharing one design — radial power gauge, speed and
   heart pods, corner brackets, and a sparkline of the same power history the terrain
@@ -297,6 +320,12 @@ imports `noble-winrt` unconditionally — there is no runtime branch to classic 
 contrary to the Requirements section above. On macOS/Linux the import itself is the
 failure point, so `npm run dev` cannot connect there. Either add the fallback or
 narrow the documented support.
+
+**Duplicated VR panel mechanics.** `ride-hud.js` and `space-hud.js` each carry their
+own copy of the head-anchored curved-panel code — geometry, lazy yaw follow, mode
+gating, repaint throttle — differing only in what they draw. It was duplicated rather
+than shared to avoid destabilising the working ride view while adding the flight view;
+extracting a `vr-panel.js` the two draw into is the obvious follow-up.
 
 **Unwired code.** `setSpinDownControl` and `setLatitudeAndLongitude` are implemented
 in `ftms/encoder.ts` but exposed neither on `FTMSClient` nor from `index.ts`; the

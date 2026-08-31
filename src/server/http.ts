@@ -14,6 +14,7 @@ import type { WsServer } from "./ws.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HTML_PATH = join(__dirname, "public", "index.html");
 const RIDE_HTML_PATH = join(__dirname, "public", "ride.html");
+const SPACE_HTML_PATH = join(__dirname, "public", "space.html");
 
 function assetError(path: string): string {
   return (
@@ -63,9 +64,20 @@ export function createApp(
     }
   });
 
-  app.get("/ride-landscape.js", (c) => serveAsset(c, "ride-landscape.js"));
-  app.get("/ride-hud.js", (c) => serveAsset(c, "ride-hud.js"));
-  app.get("/ride.js", (c) => serveAsset(c, "ride.js"));
+  app.get("/space", (c) => {
+    try {
+      const html = readFileSync(SPACE_HTML_PATH, "utf-8");
+      return c.html(html);
+    } catch {
+      return c.text(assetError(SPACE_HTML_PATH), 500);
+    }
+  });
+
+  // Serve any top-level script from public/. The pattern allows a single
+  // path segment ending in .js and no dots or slashes before the extension,
+  // so it cannot be walked out of the directory, and it is specific enough
+  // not to shadow the /api routes registered above.
+  app.get("/:name{[A-Za-z0-9_-]+\\.js}", (c) => serveAsset(c, c.req.param("name")));
 
   app.get("/api/status", (c) => {
     return c.json({
