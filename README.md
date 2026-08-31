@@ -37,11 +37,49 @@ Then open http://localhost:3000 in a browser.
 The server scans for a compatible FTMS device, connects to the first one found,
 and the dashboard updates live as data arrives.
 
+### Opening it from another device
+
+The server binds all interfaces by default, so a phone, tablet or headset on the same
+network can reach it. On startup it prints the exact URLs to use:
+
+```
+[ftms] listening on all interfaces:3000
+       local    http://localhost:3000/
+       network  http://192.168.1.42:3000/        (ride view: /ride)
+```
+
+Use the `network` address — `localhost` on another device means *that* device. The
+page and the WebSocket both derive their URL from `location.host`, so nothing needs
+configuring.
+
+If it still will not connect, in likely order:
+
+1. **Windows Firewall.** It blocks inbound connections to Node by default, and
+   silently so if the first-run prompt was dismissed. Allow the port from an
+   administrator terminal:
+
+   ```powershell
+   netsh advfirewall firewall add rule name="FTMS 3000" dir=in action=allow protocol=TCP localport=3000
+   ```
+
+   Windows also blocks far more aggressively when the network profile is set to
+   *Public*; set the network to *Private* if it is not already.
+2. **Check the server is actually reachable** from the other device: open
+   `http://<ip>:3000/api/status`. It returns JSON with no WebSocket or BLE involved,
+   so it isolates networking from everything else.
+3. **Client isolation / guest Wi-Fi.** Many routers stop devices on the network from
+   talking to each other. A guest SSID almost always does, and the two devices must be
+   on the same subnet — 2.4 GHz and 5 GHz bands on the same router are usually fine,
+   a mesh guest network usually is not.
+4. **`HOST` is set.** If `HOST=127.0.0.1` is in the environment or a `.env`, the server
+   is deliberately private. The startup log says so explicitly.
+
 ## Configuration
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP/WebSocket port |
+| `HOST` | *(all interfaces)* | Bind address. Leave unset to accept connections from the local network; set `127.0.0.1` to keep the server private |
 | `AUTO_CONNECT` | `true` | Automatically connect to the first FTMS device found; set to `false` to only scan |
 | `DEBUG_BLE` | *(off)* | Set to `1` to log every discovered BLE peripheral and its advertised services |
 
@@ -121,7 +159,7 @@ if (devices.length > 0) {
 ## Scripts
 
 - `npm run dev` — run via `tsx` (no build step)
-- `npm run build` — compile to `dist/`
+- `npm run build` — compile to `dist/` and copy `src/server/public` into it
 - `npm start` — run compiled output
 
 ## Project analysis
@@ -185,6 +223,27 @@ for the next notification.
     constant power output produces a uniform canyon, and rigidly translating a uniform
     canyon looks completely still.
 
+  **Tuning the visuals.** Three knobs, in the order you are most likely to want them:
+
+  | Knob | File | Meaning |
+  | --- | --- | --- |
+  | `POWER_MAX` | `ride.js` | Watts that read as "full". Scales the terrain height, the radial gauge and the sparkline together, and the demo signal is derived from it so it always spans a comparable range. |
+  | `WALL_MAXH` | `ride-landscape.js` | World height of a full-power sample. |
+  | `TERRAIN_CONTRAST` | `ride-landscape.js` | Exaggerates the swing between peaks and valleys. |
+
+  `TERRAIN_CONTRAST` pushes the normalized value through a symmetric S-curve, so
+  power below mid-range sinks toward the valley floor and power above it climbs
+  toward the peak. The curve is monotonic and preserves both endpoints — 0 W is still
+  flat ground, `POWER_MAX` still reaches exactly `WALL_MAXH` — it only steepens the
+  middle. `1` disables it. Note it deliberately suppresses the bottom of the range: if
+  your typical effort sits in the *lower* half of `POWER_MAX` the terrain will read as
+  mostly flat, and the fix is to lower `POWER_MAX` rather than to raise the contrast.
+
+  Wall height and canyon width are coupled: raising `WALL_MAXH` without pushing
+  `WALL_RIDGE_X`/`WALL_X_HALF` out to match turns the walls into vertical curtains that
+  run off the top of the frame, and the power silhouette stops being readable. Keeping
+  `WALL_MAXH / WALL_RIDGE_X` near 1.8 keeps it looking like a mountain range.
+
   Two HUDs, never both at once, sharing one design — radial power gauge, speed and
   heart pods, corner brackets, and a sparkline of the same power history the terrain
   is built from. The windowed one is DOM/CSS; the VR one draws that design to a 2D
@@ -244,6 +303,13 @@ in `ftms/encoder.ts` but exposed neither on `FTMSClient` nor from `index.ts`; th
 `equipment/*` snapshot helpers are exported for library users but unused by the app,
 and cover four of the six equipment types. (The dead `ride-tick` and `hud-punch`
 components and the duplicate `id="hud"` in the ride view have since been fixed.)
+
+**Static assets were missing from the build** (fixed). `tsc` only emits `.js` for `.ts`
+inputs, so `src/server/public` never reached `dist/`. Since `http.ts` resolves the
+dashboard and ride view relative to its own directory, `npm run build && npm start`
+served 500 for `/` and `/ride` and 404 for every script — only `npm run dev` worked.
+`npm run build` now copies the directory, and a missing asset reports the path it
+looked for rather than a generic hint.
 
 **Connection state reporting** (fixed). Three defects in the same path: `deviceName`
 was consumed by `main.ts`, `ws.ts`, the dashboard and the ride HUD but never produced —

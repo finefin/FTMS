@@ -41,14 +41,14 @@
   // so it read as a permanently static cyan grid. The magenta ground grid is
   // now the only floor, and it scrolls visibly because its rungs cross the
   // travel axis.
-  var WALL_FLAT_HALF = 8;    // half-width of the riding corridor = wall footing
-  var WALL_X_HALF = 40;      // outer edge of each wall
+  var WALL_FLAT_HALF = 13;   // half-width of the riding corridor = wall footing
+  var WALL_X_HALF = 57;      // outer edge of each wall
   var WALL_STEP_X = 4;       // 9 columns per side
   var WALL_STEP_Z = 4;       // one graph sample per 4 m of track
   var WALL_ROWS = 60;        // 240 m of visible history
   var WALL_Z_NEAR = 12;      // nearest row sits behind the camera so peaks sweep past
-  var WALL_RIDGE_X = 24;     // where the wall reaches full height (the readable crest line)
-  var WALL_MAXH = 42;        // height of a 100%-power sample
+  var WALL_RIDGE_X = 37;     // where the wall reaches full height (the readable crest line)
+  var WALL_MAXH = 68;        // height of a 100%-power sample
   var WALL_BACK_DROP = 0.45; // how far the far side of the ridge falls away
 
   // Every Nth sample row is drawn as a bright marker rung. The markers are
@@ -70,6 +70,15 @@
   // every ~0.36 s and the canyon shows ~26 s of power history.
   var WORLD_SPEED_SCALE = 1.6;
 
+  // Terrain contrast. Power that hovers inside a narrow band would otherwise
+  // plot as a near-flat plateau, so the normalized value is pushed through a
+  // symmetric S-curve: anything below mid-range sinks toward the valley floor,
+  // anything above it climbs toward the peak. The curve is monotonic and
+  // preserves both endpoints, so 0 W is still flat ground and full power still
+  // reaches exactly WALL_MAXH — it only exaggerates the swing in between.
+  // 1 = linear (no shaping); higher = more dramatic.
+  var TERRAIN_CONTRAST = 2.1;
+
   // Smoothing of the plotted value and the scroll speed toward the values
   // last transmitted (higher = snappier, lower = longer tail).
   var VALUE_SMOOTH = 0.12;
@@ -90,6 +99,15 @@
 
   function smoothstep(t) {
     return t * t * (3 - 2 * t);
+  }
+
+  function contrast(v) {
+    if (TERRAIN_CONTRAST === 1) return v;
+    if (v <= 0) return 0;
+    if (v >= 1) return 1;
+    return v < 0.5
+      ? 0.5 * Math.pow(2 * v, TERRAIN_CONTRAST)
+      : 1 - 0.5 * Math.pow(2 * (1 - v), TERRAIN_CONTRAST);
   }
 
   function wrap(i) {
@@ -539,7 +557,9 @@
     },
 
     setFitnessData: function (fd) {
-      if (fd.value !== undefined && fd.value !== null) this._targetValue = clamp01(fd.value);
+      if (fd.value !== undefined && fd.value !== null) {
+        this._targetValue = contrast(clamp01(fd.value));
+      }
       if (fd.heartRate !== undefined && fd.heartRate !== null) this._targetHeartRate = fd.heartRate;
       if (fd.speed !== undefined && fd.speed !== null) this._targetSpeed = fd.speed;
     },

@@ -359,7 +359,7 @@
   function drawSpark(ctx, rs) {
     var x0 = 84, x1 = CW - 84, yTop = 348, yBot = 462;
     var w = x1 - x0, h = yBot - yTop;
-    var pmax = rs.powerMax || 400;
+    var pmax = rs.powerMax || 60;
 
     ctx.strokeStyle = 'rgba(255,255,255,0.07)';
     ctx.lineWidth = 1;
@@ -601,7 +601,7 @@
 
       // Ease the readouts exactly like the DOM HUD does.
       var k = Math.min(1, dtSec * 11);
-      var pmax = rs.powerMax || 400;
+      var pmax = rs.powerMax || 60;
       sh.power += ((rs.power || 0) - sh.power) * k;
       sh.speed += ((rs.speed || 0) - sh.speed) * k;
       sh.gauge += (clamp01((rs.power || 0) / pmax) - sh.gauge) * k;

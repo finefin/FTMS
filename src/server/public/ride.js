@@ -11,9 +11,10 @@
   // (ride-hud.js) takes over inside a headset and the two never overlap.
   // =====================================================================
 
-  // Power (W) mapped to full mountain height. Indoor bikes typically top out
-  // around 300-400 W, so this leaves a little headroom above threshold work.
-  var POWER_MAX = 400;
+  // Power (W) that reads as "full" across every visual: mountain height, the
+  // radial gauge, and the sparkline's vertical scale. Change this one value to
+  // rescale all of them together.
+  var POWER_MAX = 60;
   var SPEED_MAX = 60;   // km/h at a full speed bar
   var HR_MAX = 200;
 
@@ -47,7 +48,7 @@
     cadence: null, distance: null, elapsed: null, energy: null,
     device: null, deviceLabel: 'No device', equipmentLabel: null,
     connection: 'idle', demo: false,
-    powerMax: 400, speedMax: 60, hrMax: 200,
+    powerMax: 60, speedMax: 60, hrMax: 200,
     spark: null, sparkFilled: 0, sparkLen: 0
   };
 
@@ -409,10 +410,12 @@
         return;
       }
       var t = (performance.now() - t0) / 1000;
-      var power = 165
-        + 95 * Math.sin(t * 0.16)
-        + 50 * Math.sin(t * 0.47 + 1.1)
-        + 22 * Math.sin(t * 1.6 + 0.4);
+      // Scaled off POWER_MAX so the demo always spans roughly the same
+      // fraction of the visuals as a real ride, whatever that is set to.
+      var power = POWER_MAX * 0.53
+        + POWER_MAX * 0.28 * Math.sin(t * 0.16)
+        + POWER_MAX * 0.15 * Math.sin(t * 0.47 + 1.1)
+        + POWER_MAX * 0.07 * Math.sin(t * 1.6 + 0.4);
       power = Math.max(0, power);
       applyData('indoor_bike', {
         instantaneousPower: power,
