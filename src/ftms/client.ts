@@ -3,7 +3,7 @@
 
 import { EventEmitter } from "events";
 import { BleConnection } from "../ble/connection.js";
-import type { DiscoveredDevice, ConnectionState } from "../ble/types.js";
+import type { DiscoveredDevice, ConnectionState, ConnectionStateEvent } from "../ble/types.js";
 import {
   FTMS_CHAR_UUIDS,
   EquipmentType,
@@ -53,7 +53,26 @@ export class FTMSClient extends EventEmitter {
   constructor() {
     super();
     this.connection = new BleConnection();
-    this.connection.on("stateChange", (event: unknown) => {
+    this.connection.on("stateChange", (event: ConnectionStateEvent) => {
+      // Mirror the transport's lifecycle onto our own status. Without this an
+      // unsolicited drop (the peripheral's own "disconnect") left `status`
+      // reading "connected" forever, so /api/status kept reporting a live
+      // device and main.ts's reconnect poll — which returns early while
+      // connected — never scanned again.
+      //
+      // "scanning"/"idle" are deliberately not mirrored: a scan issued while
+      // connected would otherwise clobber the connected status.
+      if (
+        event.state === "connecting" ||
+        event.state === "connected" ||
+        event.state === "disconnected" ||
+        event.state === "error"
+      ) {
+        this._status = event.state;
+      }
+      if (event.state === "disconnected" || event.state === "error") {
+        this._deviceInfo = undefined;
+      }
       this.emit("stateChange", event);
     });
     this.connection.on("device", (device: DiscoveredDevice) => {
@@ -87,6 +106,9 @@ export class FTMSClient extends EventEmitter {
 
   async connect(deviceId: string): Promise<void> {
     await this.connection.connect(deviceId);
+    // Record which device we landed on; `deviceInfo` was previously declared
+    // and exposed but never assigned, so /api/status always reported null.
+    this._deviceInfo = this.connection.device ?? undefined;
     this._status = "connected";
     await this.setup();
   }

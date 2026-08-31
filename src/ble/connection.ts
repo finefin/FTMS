@@ -7,7 +7,7 @@ import {
   FTMS_SERVICE_UUID,
   FTMS_SERVICE_UUID_LONG,
 } from "../ftms/constants.js";
-import type { DiscoveredDevice, ConnectionState } from "./types.js";
+import type { DiscoveredDevice, ConnectionState, ConnectionStateEvent } from "./types.js";
 
 const DEBUG = process.env.DEBUG_BLE === "1";
 
@@ -41,20 +41,46 @@ function toUpperKey(uuid: string): string {
   return normalizeUuid(uuid).toUpperCase();
 }
 
+function describePeripheral(peripheral: NoblePeripheral): DiscoveredDevice {
+  const id = peripheral.id ?? peripheral.address;
+  return {
+    id,
+    name: peripheral.advertisement?.localName ?? peripheral.address ?? id,
+    address: peripheral.address ?? id,
+    rssi: peripheral.rssi ?? 0,
+    serviceData: peripheral.advertisement?.serviceUuids,
+    advertisement: peripheral.advertisement,
+  };
+}
+
 export class BleConnection extends EventEmitter {
   private peripheral: NoblePeripheral | null = null;
   private ftmsService: NobleService | null = null;
   private characteristics: Map<string, NobleCharacteristic> = new Map();
   private discovered: Map<string, NoblePeripheral> = new Map();
+  private descriptions: Map<string, DiscoveredDevice> = new Map();
+  private _device: DiscoveredDevice | null = null;
   private _state: ConnectionState = "idle";
 
   get state(): ConnectionState {
     return this._state;
   }
 
+  /** The device currently connected or being connected to, if any. */
+  get device(): DiscoveredDevice | null {
+    return this._device;
+  }
+
   private setState(state: ConnectionState, detail?: { deviceId?: string; error?: string }) {
     this._state = state;
-    this.emit("stateChange", { state, ...detail });
+    const event: ConnectionStateEvent = { state, ...detail };
+    // Carry the human-readable name on every state event. Consumers (the
+    // WebSocket payload, the dashboard, the ride HUD) all want to label the
+    // connection, and the device id alone is not presentable.
+    if (this._device) {
+      event.deviceName = this._device.name ?? this._device.address ?? this._device.id;
+    }
+    this.emit("stateChange", event);
   }
 
   async init(timeoutMs = 15000): Promise<void> {
@@ -127,15 +153,9 @@ export class BleConnection extends EventEmitter {
         if (seen.has(id)) return;
         seen.add(id);
 
-        const device: DiscoveredDevice = {
-          id,
-          name: peripheral.advertisement?.localName ?? peripheral.address ?? id,
-          address: peripheral.address ?? id,
-          rssi: peripheral.rssi ?? 0,
-          serviceData: peripheral.advertisement?.serviceUuids,
-          advertisement: peripheral.advertisement,
-        };
+        const device = describePeripheral(peripheral);
         this.discovered.set(id, peripheral);
+        this.descriptions.set(id, device);
         devices.push(device);
         this.emit("device", device);
       };
@@ -152,6 +172,7 @@ export class BleConnection extends EventEmitter {
   }
 
   async connect(deviceId: string): Promise<void> {
+    this._device = this.descriptions.get(deviceId) ?? null;
     this.setState("connecting", { deviceId });
 
     let peripheral = this.discovered.get(deviceId);
@@ -173,6 +194,14 @@ export class BleConnection extends EventEmitter {
         noble.startScanning([], true, () => {});
       });
       noble.stopScanning(() => {});
+      this.discovered.set(deviceId, peripheral);
+    }
+
+    // Connecting straight to an id (no prior scan in this process) leaves us
+    // without a description, so derive one from the peripheral itself.
+    if (!this._device && peripheral) {
+      this._device = describePeripheral(peripheral);
+      this.descriptions.set(deviceId, this._device);
     }
 
     try {
@@ -181,6 +210,7 @@ export class BleConnection extends EventEmitter {
         this.ftmsService = null;
         this.characteristics.clear();
         this.setState("disconnected", { deviceId });
+        this._device = null;
       });
 
       await promisify<void>((cb) => peripheral.connect(cb));
@@ -264,6 +294,7 @@ export class BleConnection extends EventEmitter {
       this.ftmsService = null;
       this.characteristics.clear();
       this.setState("disconnected");
+      this._device = null;
     }
     noble.stopScanning(() => {});
   }

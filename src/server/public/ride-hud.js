@@ -186,7 +186,7 @@
     ctx.fillStyle = '#dfe9ff';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    var name = rs.demo ? 'DEMO SIGNAL' : (rs.device || 'NO DEVICE');
+    var name = rs.deviceLabel || (rs.demo ? 'DEMO SIGNAL' : 'NO DEVICE');
     ctx.fillText(name.toUpperCase(), 106, y);
 
     if (rs.equipmentLabel) {

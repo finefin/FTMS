@@ -14,5 +14,6 @@ export type ConnectionState = "idle" | "scanning" | "connecting" | "connected" |
 export interface ConnectionStateEvent {
   state: ConnectionState;
   deviceId?: string;
+  deviceName?: string;
   error?: string;
 }

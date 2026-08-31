@@ -45,7 +45,8 @@
   window.RideState = {
     speed: 0, heartRate: null, power: 0, value: 0, equipment: null,
     cadence: null, distance: null, elapsed: null, energy: null,
-    device: null, equipmentLabel: null, connection: 'idle', demo: false,
+    device: null, deviceLabel: 'No device', equipmentLabel: null,
+    connection: 'idle', demo: false,
     powerMax: 400, speedMax: 60, hrMax: 200,
     spark: null, sparkFilled: 0, sparkLen: 0
   };
@@ -118,6 +119,19 @@
     var mm = (m < 10 && h > 0 ? '0' : '') + m;
     var ss = (s < 10 ? '0' : '') + s;
     return h > 0 ? h + ':' + mm + ':' + ss : mm + ':' + ss;
+  }
+
+  // Label for the connection. A connected machine that advertises no local
+  // name still must not read as "No device" — fall back to the connection
+  // state before that, and only claim "No device" when there really is none.
+  function deviceLabel() {
+    if (state.demo) return 'Demo signal';
+    if (state.device) return state.device;
+    if (state.connection === 'connected') return 'Connected';
+    if (state.connection === 'connecting') return 'Connecting';
+    if (state.connection === 'scanning') return 'Scanning';
+    if (state.connection === 'error') return 'Connection error';
+    return 'No device';
   }
 
   function fmtDistance(m) {
@@ -250,7 +264,7 @@
     if (pod) pod.classList.toggle('hot', shown.gauge > 0.8);
 
     setText('v-equipment', EQUIPMENT_LABELS[state.equipment] || '--');
-    setText('v-device', state.device || (state.demo ? 'Demo signal' : 'No device'));
+    setText('v-device', deviceLabel());
 
     var lamp = $('lamp');
     if (lamp) lamp.className = 'lamp lamp-' + state.connection + (state.demo ? ' lamp-demo' : '');
@@ -274,6 +288,7 @@
     rs.elapsed = state.elapsed;
     rs.energy = state.energy;
     rs.device = state.device;
+    rs.deviceLabel = deviceLabel();
     rs.connection = state.connection;
     rs.demo = state.demo;
     rs.spark = spark;

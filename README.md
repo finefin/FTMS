@@ -245,6 +245,15 @@ in `ftms/encoder.ts` but exposed neither on `FTMSClient` nor from `index.ts`; th
 and cover four of the six equipment types. (The dead `ride-tick` and `hud-punch`
 components and the duplicate `id="hud"` in the ride view have since been fixed.)
 
+**Connection state reporting** (fixed). Three defects in the same path: `deviceName`
+was consumed by `main.ts`, `ws.ts`, the dashboard and the ride HUD but never produced —
+`BleConnection.setState` only ever emitted `deviceId`, so every client showed
+"No device" while connected. `FTMSClient._deviceInfo` was declared and exposed but
+never assigned, so `/api/status` always returned `device: null`. And `_status` was set
+only inside `connect()`/`disconnect()`, so an unsolicited drop left it reading
+"connected" forever — which also wedged the reconnect poll in `main.ts`, since that
+returns early while connected. The client now mirrors the transport's lifecycle.
+
 **API shape.** Every REST route is a `GET`, including the state-changing
 `/api/connect`, `/api/control`, and `/api/disconnect`, and there is no auth. Fine for
 a localhost tool; not safe to expose on a LAN as-is. `createApp` also takes a `ws`
