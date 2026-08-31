@@ -10,6 +10,8 @@ import type { DiscoveredDevice } from "./ble/types.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const AUTO_CONNECT = process.env.AUTO_CONNECT !== "false";
+// Unset by default so the server accepts connections from the local network.
+const HOST = process.env.HOST;
 
 async function main(): Promise<void> {
   const client = new FTMSClient();
@@ -31,7 +33,7 @@ async function main(): Promise<void> {
     console.log(`[ftms] discovered: ${device.name} (${device.id}) rssi=${device.rssi}`);
   });
 
-  await startServer(client, ws, PORT);
+  await startServer(client, ws, PORT, HOST);
 
   try {
     console.log("[ftms] initializing bluetooth...");

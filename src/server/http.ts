@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import type { AddressInfo } from "net";
 import { readFileSync } from "fs";
+import { networkInterfaces } from "os";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { FTMSClient } from "../ftms/client.js";
@@ -13,6 +14,15 @@ import type { WsServer } from "./ws.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HTML_PATH = join(__dirname, "public", "index.html");
 const RIDE_HTML_PATH = join(__dirname, "public", "ride.html");
+
+function assetError(path: string): string {
+  return (
+    `Static asset not found at ${path}\n\n` +
+    `Static files live in src/server/public and are copied into dist/ by ` +
+    `"npm run build". If you are running the compiled build, re-run the build; ` +
+    `"npm run dev" serves them straight from src.`
+  );
+}
 
 function serveAsset(c: any, name: string) {
   const file = join(__dirname, "public", name);
@@ -25,7 +35,7 @@ function serveAsset(c: any, name: string) {
         : "application/octet-stream";
     return c.body(buf, 200, { "Content-Type": contentType as any, "Cache-Control": "no-cache" });
   } catch {
-    return c.text("Not found", 404);
+    return c.text(assetError(file), 404);
   }
 }
 
@@ -40,7 +50,7 @@ export function createApp(
       const html = readFileSync(HTML_PATH, "utf-8");
       return c.html(html);
     } catch {
-      return c.text("Dashboard not found. Build the project or run via tsx.", 500);
+      return c.text(assetError(HTML_PATH), 500);
     }
   });
 
@@ -49,7 +59,7 @@ export function createApp(
       const html = readFileSync(RIDE_HTML_PATH, "utf-8");
       return c.html(html);
     } catch {
-      return c.text("Ride view not found. Build the project or run via tsx.", 500);
+      return c.text(assetError(RIDE_HTML_PATH), 500);
     }
   });
 
@@ -111,15 +121,44 @@ export function createApp(
   return app;
 }
 
+/** Non-internal IPv4 addresses, i.e. the ones other devices can reach. */
+function lanAddresses(): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(networkInterfaces())) {
+    for (const ni of list ?? []) {
+      if (ni.family === "IPv4" && !ni.internal) out.push(ni.address);
+    }
+  }
+  return out;
+}
+
 export async function startServer(
   client: FTMSClient,
   ws: WsServer,
-  port = 3000
+  port = 3000,
+  hostname?: string
 ): Promise<import("http").Server> {
   const app = createApp(client, ws);
-  const server = serve({ fetch: app.fetch, port }, (info) => {
+  // With no hostname, Node binds the unspecified address (`::`, dual-stack),
+  // which already accepts connections from the network. Passing HOST only
+  // narrows it — e.g. HOST=127.0.0.1 to keep the server private.
+  const server = serve({ fetch: app.fetch, port, hostname }, (info) => {
     const addr = info as AddressInfo;
-    console.log(`FTMS dashboard: http://localhost:${addr.port}`);
+    const lan = lanAddresses();
+    console.log(`[ftms] listening on ${hostname ?? "all interfaces"}:${addr.port}`);
+    console.log(`       local    http://localhost:${addr.port}/`);
+    for (const ip of lan) {
+      console.log(`       network  http://${ip}:${addr.port}/        (ride view: /ride)`);
+    }
+    if (lan.length === 0) {
+      console.log("       no external network interface found");
+    }
+    if (hostname && hostname !== "0.0.0.0" && hostname !== "::") {
+      console.log(`       NOTE: HOST=${hostname} restricts access; unset HOST to allow other devices.`);
+    } else if (process.platform === "win32") {
+      console.log("       If another device cannot connect, allow the port through Windows Firewall:");
+      console.log(`       netsh advfirewall firewall add rule name="FTMS ${addr.port}" dir=in action=allow protocol=TCP localport=${addr.port}`);
+    }
   });
   ws.attach(server as unknown as import("http").Server);
   return server as unknown as import("http").Server;
