@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FTMS Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <script src="/qrcode.js"></script>
   <style>
     :root {
       --bg: #0f172a;
@@ -104,6 +105,53 @@
     }
     .device-info { margin-bottom: 24px; font-size: 0.95rem; color: var(--muted); }
     .device-info strong { color: var(--text); }
+    .headset-section {
+      margin-bottom: 24px;
+    }
+    .headset-section h2 {
+      font-size: 1.1rem;
+      margin-bottom: 4px;
+      color: var(--muted);
+    }
+    .headset-section .hint {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .headset-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .headset-card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+    .headset-card img {
+      width: 96px;
+      height: 96px;
+      border-radius: 8px;
+      background: #fff;
+      flex-shrink: 0;
+    }
+    .headset-card .meta { min-width: 0; }
+    .headset-card .meta .name { font-weight: 600; margin-bottom: 4px; }
+    .headset-card .meta .url {
+      font-size: 0.8rem;
+      color: var(--accent);
+      word-break: break-all;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .headset-card .meta .warn {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 6px;
+    }
     .chart-section {
       margin-top: 24px;
     }
@@ -127,11 +175,18 @@
   <div class="status-bar">
     <span class="dot" id="statusDot"></span>
     <span id="statusText">Disconnected</span>
-    <button id="scanBtn" class="scan-btn">Scan</button>
+    <button id="scanBtn" class="scan-btn" title="Scans for a device and connects to the first one found — also what to press if the machine drops.">Reconnect</button>
     <span id="deviceName" style="margin-left:auto"></span>
   </div>
   <div class="scan-result" id="scanResult"></div>
   <div class="device-info" id="deviceInfo"></div>
+
+  <div class="headset-section" id="headsetSection" style="display:none">
+    <h2>Connect from your headset</h2>
+    <div class="hint">Same Wi-Fi network as this computer. Open the URL below, or scan its code — the browser will warn about the certificate once; that's expected for a self-signed cert, click through it.</div>
+    <div class="headset-cards" id="headsetCards"></div>
+  </div>
+
   <div class="grid" id="metrics"></div>
   <div class="banner" id="emptyBanner">Waiting for data from an FTMS device…</div>
   <div class="chart-section" id="chartSection" style="display:none">
@@ -429,6 +484,56 @@
     }
 
     scanBtn.addEventListener("click", scan);
+
+    const HEADSET_VIEWS = [
+      { path: "/ride", name: "Ride" },
+      { path: "/space", name: "Flight" },
+    ];
+
+    async function loadHeadsetPanel() {
+      const section = document.getElementById("headsetSection");
+      const cards = document.getElementById("headsetCards");
+      try {
+        const res = await fetch("/api/server-info");
+        if (!res.ok) return;
+        const info = await res.json();
+        const base = Array.isArray(info.urls) ? info.urls[0] : null;
+        if (!base) return;
+
+        cards.innerHTML = "";
+        for (const view of HEADSET_VIEWS) {
+          const url = base + view.path;
+          const card = document.createElement("div");
+          card.className = "headset-card";
+
+          const img = document.createElement("img");
+          if (typeof qrcode === "function") {
+            const qr = qrcode(0, "M");
+            qr.addData(url);
+            qr.make();
+            img.src = qr.createDataURL(6, 4);
+          }
+          img.alt = `QR code for ${url}`;
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.innerHTML = `
+            <div class="name">${view.name}</div>
+            <div class="url">${url}</div>
+            ${info.https ? "" : '<div class="warn">Plain http — WebXR needs https or localhost to work in the headset browser.</div>'}
+          `;
+
+          card.appendChild(img);
+          card.appendChild(meta);
+          cards.appendChild(card);
+        }
+        section.style.display = "";
+      } catch {
+        // No network info available (offline/edge case) — leave the panel hidden.
+      }
+    }
+
+    loadHeadsetPanel();
   </script>
 </body>
 </html>

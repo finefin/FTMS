@@ -20,7 +20,8 @@ This project connects to Bluetooth Low Energy (BLE) fitness machines that expose
 - Node.js 20+
 - BLE adapter. The BLE layer adapts to the platform:
   - **Windows 10+**: uses the native Windows Bluetooth LE stack via `noble-winrt` (no extra drivers/dongles needed for a GATT client). Requires Windows `>= 10.0.15014`.
-  - **Linux/macOS**: falls back to the classic `noble` bindings. On Linux add `cap_net_raw` or run with `sudo`:
+  - **macOS**: uses `@abandonware/noble` via CoreBluetooth. The OS will prompt for Bluetooth permission the first time it scans; if you're running as a packaged app rather than `npm run dev`, the app needs `NSBluetoothAlwaysUsageDescription` set or the OS silently denies access instead of prompting.
+  - **Linux**: uses `@abandonware/noble` via BlueZ. Add `cap_net_raw` or run with `sudo`:
     ```bash
     sudo setcap cap_net_raw+eip $(readlink -f $(which node))
     ```
@@ -74,6 +75,82 @@ If it still will not connect, in likely order:
 4. **`HOST` is set.** If `HOST=127.0.0.1` is in the environment or a `.env`, the server
    is deliberately private. The startup log says so explicitly.
 
+## Desktop app (VR headset use)
+
+Riding `/ride` or `/space` from a standalone headset (e.g. a Quest) needs the page
+served over `https://` — WebXR only runs in a secure context, and `http://<lan-ip>`
+doesn't count. `npm run dev`/`npm start` stay plain HTTP by default (see
+`TLS_CERT_FILE`/`TLS_KEY_FILE` below if you want to drive that manually); the desktop
+app in `electron/` is the normal way to get this:
+
+```bash
+npm run electron:dev
+```
+
+This opens a small window — the same dashboard as `/`, plus a **Connect from your
+headset** panel showing the `https://` URL (and a QR code) for `/ride` and `/space`.
+It generates and caches a self-signed certificate for `localhost` and the machine's
+LAN IP the first time it runs (`src/server/cert.ts`), so the window itself loads
+without any warning. **The headset will still show one** — "your connection is not
+private" is expected for a self-signed cert with no browser-trusted CA behind it.
+Click through it once (Advanced → proceed); per the secure-context spec, a page a
+user has manually trusted this way still counts as `https` for anything gated on it,
+including WebXR. This hasn't been verified against a specific headset browser build —
+if it turns out not to work, see the mkcert fallback below.
+
+Closing the window quits the app and disconnects the fitness machine — same mental
+model as the CLI (run it, use it, stop it when you're done). There's no
+background/tray mode.
+
+**Building an installer**: `npm run electron:build` (via `electron-builder`) produces
+a Windows NSIS installer, a macOS `.dmg`/`.zip`, or a Linux AppImage/`.deb`, depending
+on the host OS. These builds are **unsigned** — no code-signing certificate is set up
+— so expect a Windows SmartScreen or macOS Gatekeeper "unknown publisher" warning on
+first run; that's expected, not a sign anything is wrong.
+
+**Platform note**: only Windows (`noble-winrt`) has been exercised against real
+hardware this project. macOS/Linux go through `@abandonware/noble` instead — the
+module loads and the API shape matches, but real device connections on those two
+platforms haven't been verified against actual Bluetooth hardware.
+
+<details>
+<summary>Fallback: a real (non-self-signed) certificate via mkcert, if click-through doesn't work</summary>
+
+If the headset's browser rejects the self-signed cert outright rather than offering a
+click-through, install [mkcert](https://github.com/FiloSottile/mkcert) on the machine
+running the server and generate a certificate signed by a local CA:
+
+```bash
+mkcert -install
+mkcert -cert-file certs/dev-cert.pem -key-file certs/dev-key.pem <lan-ip> localhost 127.0.0.1
+```
+
+Point the CLI at it directly (bypasses the desktop app's own cert generation):
+
+```bash
+TLS_CERT_FILE=certs/dev-cert.pem TLS_KEY_FILE=certs/dev-key.pem npm run dev
+```
+
+The server itself now trusts this cert (`mkcert -install` adds the CA to the local
+trust store), but the headset still doesn't — that CA has to be installed on it too:
+
+1. `mkcert -CAROOT` prints the folder containing `rootCA.pem`.
+2. Enable Developer Mode on the headset (Meta Horizon mobile app → headset settings
+   → Developer Mode; needs a free Meta developer organization).
+3. Install `adb` (Android Platform Tools), connect the headset over USB, accept the
+   "Allow USB debugging" prompt.
+4. `adb push rootCA.pem /sdcard/Download/rootCA.pem`
+5. On the headset: Settings → install a certificate from storage → pick `rootCA.pem`
+   → confirm. Exact wording varies by OS build/version — this is the standard Android
+   "install CA certificate" flow, adapt as needed.
+6. Reboot the headset.
+
+A cert generated this way is bound to a specific LAN IP, so a DHCP reservation for
+the server machine is worth setting up — otherwise it needs regenerating whenever the
+IP changes.
+
+</details>
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -82,6 +159,7 @@ If it still will not connect, in likely order:
 | `HOST` | *(all interfaces)* | Bind address. Leave unset to accept connections from the local network; set `127.0.0.1` to keep the server private |
 | `AUTO_CONNECT` | `true` | Automatically connect to the first FTMS device found; set to `false` to only scan |
 | `DEBUG_BLE` | *(off)* | Set to `1` to log every discovered BLE peripheral and its advertised services |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | *(unset, plain HTTP)* | Advanced/manual HTTPS for the CLI — PEM cert/key file paths, both required together. The desktop app (`electron/`) manages its own cert automatically instead; see [Desktop app](#desktop-app-vr-headset-use) |
 
 ## REST endpoints
 
@@ -91,6 +169,7 @@ If it still will not connect, in likely order:
 | `GET` | `/ride` | Serve the 3D / VR ride view (synthwave canyon) |
 | `GET` | `/space` | Serve the 3D / VR flight view (Earth → Moon) |
 | `GET` | `/api/status` | Connection and equipment status as JSON |
+| `GET` | `/api/server-info` | Scheme/port/LAN URLs as JSON — what the dashboard's headset-connect panel builds its QR codes from |
 | `GET` | `/api/devices` | Scan (5s) and list FTMS devices |
 | `GET` | `/api/connect?id=<deviceId>` | Connect to a device |
 | `GET` | `/api/control?op=start` | Control: `start`, `stop`, `pause`, `speed`, `power`, `resistance`, `inclination` (with `value=`) |
@@ -121,9 +200,10 @@ State updates use `{ "type": "state", "state": "connected", "deviceName": "..." 
 ```
 src/
 ├── index.ts                 # Public library exports
-├── main.ts                  # App entry point (server + BLE)
+├── main.ts                  # CLI entry point (thin wrapper around app.ts)
+├── app.ts                   # Bootstrap: BLE + server + poll loop, shared by the CLI and Electron
 ├── ble/
-│   ├── connection.ts        # BLE scan/connect (noble-winrt on Windows, noble elsewhere)
+│   ├── connection.ts        # BLE scan/connect (noble-winrt on Windows, @abandonware/noble elsewhere)
 │   └── types.ts
 ├── ftms/
 │   ├── constants.ts         # UUIDs and op codes
@@ -135,7 +215,14 @@ src/
 └── server/
     ├── http.ts              # Hono routes / REST
     ├── ws.ts                # WebSocket server
-    └── public/index.html    # Live dashboard
+    ├── cert.ts              # Self-signed HTTPS cert generation/caching
+    └── public/
+        ├── index.html       # Live dashboard (+ headset-connect QR panel)
+        ├── ride.html/.js    # VR ride view
+        └── space.html/.js   # VR flight view
+electron/
+├── package.json             # Electron's own "main" entry (kept separate from the library's)
+└── main.mjs                 # Electron main process: cert + server + config-panel window
 ```
 
 ## Use as a library
@@ -162,6 +249,9 @@ if (devices.length > 0) {
 - `npm run dev` — run via `tsx` (no build step)
 - `npm run build` — compile to `dist/` and copy `src/server/public` into it
 - `npm start` — run compiled output
+- `npm run electron:dev` — build, then run the desktop app (config panel + automatic HTTPS)
+- `npm run electron:build` — build, then package an installer for the host OS via `electron-builder`
+- `npm run rebuild-native` — rebuild `noble-winrt`/`@abandonware/noble` against Electron's Node ABI (only needed if the desktop app can't load BLE natively — run after `npm install` when developing/packaging Electron)
 
 ## Project analysis
 
@@ -315,11 +405,14 @@ for the next notification.
 
 ### Findings
 
-**Platform.** The BLE layer is Windows-only in practice. `src/ble/connection.ts`
-imports `noble-winrt` unconditionally — there is no runtime branch to classic `noble`,
-contrary to the Requirements section above. On macOS/Linux the import itself is the
-failure point, so `npm run dev` cannot connect there. Either add the fallback or
-narrow the documented support.
+**Platform.** ~~The BLE layer is Windows-only in practice.~~ Fixed: `src/ble/connection.ts`
+now dynamically imports `noble-winrt` on `win32` and `@abandonware/noble` everywhere
+else, both cast to a shared minimal interface rather than either package's own types
+(the two model the same runtime object differently at the type level). The two
+libraries' callback signatures line up closely enough that no other code in this file
+changed. Windows has been exercised all session; the macOS/Linux path is new and its
+real-device behavior is unverified beyond confirming the module loads and the API
+shape matches — there's no Bluetooth hardware in the environment this was built in.
 
 **Duplicated VR panel mechanics.** `ride-hud.js` and `space-hud.js` each carry their
 own copy of the head-anchored curved-panel code — geometry, lazy yaw follow, mode
@@ -361,3 +454,17 @@ noble types keep the compiler quiet about it.
 **Tooling.** No tests, linter, or CI. The decoders are pure functions over `Buffer`s —
 the easiest thing in the project to test, and the place where a spec misreading would
 be silent.
+
+**Desktop app — real, but unverified end to end.** The Electron shell, self-signed
+cert generation/caching, and the `@abandonware/noble` backend all work as designed —
+each was exercised directly (cert SAN coverage and regeneration, a live HTTPS server
+serving every route with the generated cert, `@abandonware/noble` loading and
+exposing the expected API shape). What's *not* verified, because none of it is
+possible from the environment this was built in: a real BLE device connecting over
+`@abandonware/noble` on macOS or Linux; a packaged installer actually launching per
+platform, including whether `noble-winrt`/`@abandonware/noble`'s native builds survive
+rebuilding against Electron's Node ABI; and — the assumption the whole headset flow
+leans on — whether a Quest's browser accepts a click-through self-signed cert as a
+secure context for WebXR, versus rejecting it outright (the mkcert fallback in
+[Desktop app](#desktop-app-vr-headset-use) exists for that case). Worth testing that
+last one first, before relying on the rest.

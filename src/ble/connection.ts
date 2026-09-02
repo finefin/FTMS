@@ -1,7 +1,7 @@
 // Low-level BLE connection management: scanning, connecting, and subscribing
-// to GATT characteristic notifications via noble-winrt.
+// to GATT characteristic notifications via a platform-appropriate noble
+// backend (noble-winrt on Windows, @abandonware/noble on macOS/Linux).
 
-import noble from "noble-winrt";
 import { EventEmitter } from "events";
 import {
   FTMS_SERVICE_UUID,
@@ -17,6 +17,55 @@ const FTMS_LONG = FTMS_SERVICE_UUID_LONG.toLowerCase();
 type NoblePeripheral = any;
 type NobleService = any;
 type NobleCharacteristic = any;
+
+/**
+ * Structural shape both BLE backends satisfy — classic noble's API, which
+ * noble-winrt deliberately mirrors. Verified directly against
+ * @abandonware/noble's runtime (not its shipped .d.ts, which models the
+ * same object as free namespace exports rather than instance methods even
+ * though the actual module.exports is a Noble instance): state getter,
+ * EventEmitter-style stateChange/discover, startScanning(uuids,
+ * allowDuplicates, cb)/stopScanning(cb), peripheral.connect(cb)/
+ * discoverServices(uuids, cb), service.discoverCharacteristics(uuids, cb),
+ * characteristic.subscribe(cb)/read(cb)/write(data, withoutResponse, cb) —
+ * all matching callback signatures. Neither backend's own types are used
+ * here; we cast to this minimal interface instead, same spirit as the
+ * NobleXxx = any aliases above.
+ */
+interface Noble extends EventEmitter {
+  state: string;
+  on(event: "stateChange", listener: (state: string) => void): this;
+  on(event: "discover", listener: (peripheral: NoblePeripheral) => void): this;
+  on(event: string, listener: (...args: any[]) => void): this;
+  removeListener(event: string, listener: (...args: any[]) => void): this;
+  startScanning(
+    serviceUuids: string[],
+    allowDuplicates: boolean,
+    callback?: (error: Error | null) => void
+  ): void;
+  stopScanning(callback?: () => void): void;
+}
+
+let noblePromise: Promise<Noble> | null = null;
+
+/**
+ * Loads the platform-appropriate BLE backend on first use. noble-winrt
+ * talks to the native Windows Bluetooth LE stack and only works on win32;
+ * @abandonware/noble covers macOS (CoreBluetooth) and Linux (BlueZ). Both
+ * are native addons, so this is a dynamic import gated on process.platform
+ * rather than a static one — importing the wrong one for this OS would
+ * fail to load at all.
+ */
+function loadNoble(): Promise<Noble> {
+  if (!noblePromise) {
+    noblePromise = (
+      process.platform === "win32"
+        ? import("noble-winrt")
+        : import("@abandonware/noble")
+    ).then((m: any) => m.default as Noble);
+  }
+  return noblePromise;
+}
 
 function promisify<T>(fn: (cb: (err: Error | null, ...args: any[]) => void) => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -71,6 +120,10 @@ export class BleConnection extends EventEmitter {
     return this._device;
   }
 
+  private getBackend(): Promise<Noble> {
+    return loadNoble();
+  }
+
   private setState(state: ConnectionState, detail?: { deviceId?: string; error?: string }) {
     this._state = state;
     const event: ConnectionStateEvent = { state, ...detail };
@@ -84,6 +137,7 @@ export class BleConnection extends EventEmitter {
   }
 
   async init(timeoutMs = 15000): Promise<void> {
+    const noble = await this.getBackend();
     if (noble.state === "poweredOn") return;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -114,6 +168,7 @@ export class BleConnection extends EventEmitter {
   }
 
   async scan(timeoutMs = 10000): Promise<DiscoveredDevice[]> {
+    const noble = await this.getBackend();
     this.setState("scanning");
     const devices: DiscoveredDevice[] = [];
     const seen = new Set<string>();
@@ -172,6 +227,7 @@ export class BleConnection extends EventEmitter {
   }
 
   async connect(deviceId: string): Promise<void> {
+    const noble = await this.getBackend();
     this._device = this.descriptions.get(deviceId) ?? null;
     this.setState("connecting", { deviceId });
 
@@ -288,6 +344,7 @@ export class BleConnection extends EventEmitter {
   }
 
   async disconnect(): Promise<void> {
+    const noble = await this.getBackend();
     if (this.peripheral) {
       await promisify<void>((cb) => this.peripheral.disconnect(cb)).catch(() => {});
       this.peripheral = null;

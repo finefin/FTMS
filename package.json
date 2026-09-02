@@ -8,18 +8,60 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "build": "tsc && node scripts/copy-assets.mjs",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "electron:dev": "npm run build && electron electron/",
+    "electron:build": "npm run build && electron-builder",
+    "rebuild-native": "electron-rebuild -f -w noble-winrt,@abandonware/noble"
   },
   "dependencies": {
+    "@abandonware/noble": "^1.9.2-26",
     "@hono/node-server": "^1.12.0",
     "hono": "^4.0.0",
     "noble-winrt": "^0.1.1",
+    "selfsigned": "^5.5.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^26.15.3",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "de.spielarchitekten.ftms",
+    "productName": "FTMS",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.mjs"
+    },
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.healthcare-fitness",
+      "identity": null,
+      "extendInfo": {
+        "NSBluetoothAlwaysUsageDescription": "FTMS connects to your Bluetooth fitness machine to read live workout data."
+      }
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Utility"
+    }
   }
 }

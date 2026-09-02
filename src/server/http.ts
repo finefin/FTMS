@@ -8,8 +8,10 @@ import { readFileSync } from "fs";
 import { networkInterfaces } from "os";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { createServer as createHttpsServer } from "https";
 import { FTMSClient } from "../ftms/client.js";
 import type { WsServer } from "./ws.js";
+import type { TlsMaterial } from "./cert.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HTML_PATH = join(__dirname, "public", "index.html");
@@ -42,7 +44,8 @@ function serveAsset(c: any, name: string) {
 
 export function createApp(
   client: FTMSClient,
-  ws: WsServer
+  ws: WsServer,
+  info?: { https?: boolean; port?: number }
 ) {
   const app = new Hono();
 
@@ -84,6 +87,20 @@ export function createApp(
       connected: client.status === "connected",
       device: client.deviceInfo?.name ?? null,
       equipment: client.equipment,
+    });
+  });
+
+  // What the dashboard's "connect from your headset" panel needs to build
+  // full URLs — the scheme and port aren't otherwise knowable from a page
+  // that was itself loaded over the same connection it's describing.
+  app.get("/api/server-info", (c) => {
+    const scheme = info?.https ? "https" : "http";
+    const port = info?.port ?? 3000;
+    const hosts = lanAddresses();
+    return c.json({
+      https: !!info?.https,
+      port,
+      urls: hosts.map((h) => `${scheme}://${h}:${port}`),
     });
   });
 
@@ -134,7 +151,7 @@ export function createApp(
 }
 
 /** Non-internal IPv4 addresses, i.e. the ones other devices can reach. */
-function lanAddresses(): string[] {
+export function lanAddresses(): string[] {
   const out: string[] = [];
   for (const list of Object.values(networkInterfaces())) {
     for (const ni of list ?? []) {
@@ -148,19 +165,30 @@ export async function startServer(
   client: FTMSClient,
   ws: WsServer,
   port = 3000,
-  hostname?: string
+  hostname?: string,
+  tls?: TlsMaterial
 ): Promise<import("http").Server> {
-  const app = createApp(client, ws);
+  const scheme = tls ? "https" : "http";
+  const app = createApp(client, ws, { https: !!tls, port });
   // With no hostname, Node binds the unspecified address (`::`, dual-stack),
   // which already accepts connections from the network. Passing HOST only
   // narrows it — e.g. HOST=127.0.0.1 to keep the server private.
-  const server = serve({ fetch: app.fetch, port, hostname }, (info) => {
+  const serveOptions = tls
+    ? {
+        fetch: app.fetch,
+        port,
+        hostname,
+        createServer: createHttpsServer,
+        serverOptions: { key: tls.key, cert: tls.cert },
+      }
+    : { fetch: app.fetch, port, hostname };
+  const server = serve(serveOptions as Parameters<typeof serve>[0], (info) => {
     const addr = info as AddressInfo;
     const lan = lanAddresses();
-    console.log(`[ftms] listening on ${hostname ?? "all interfaces"}:${addr.port}`);
-    console.log(`       local    http://localhost:${addr.port}/`);
+    console.log(`[ftms] listening on ${hostname ?? "all interfaces"}:${addr.port}${tls ? " (https)" : ""}`);
+    console.log(`       local    ${scheme}://localhost:${addr.port}/`);
     for (const ip of lan) {
-      console.log(`       network  http://${ip}:${addr.port}/        (ride view: /ride)`);
+      console.log(`       network  ${scheme}://${ip}:${addr.port}/        (ride view: /ride)`);
     }
     if (lan.length === 0) {
       console.log("       no external network interface found");
@@ -170,6 +198,9 @@ export async function startServer(
     } else if (process.platform === "win32") {
       console.log("       If another device cannot connect, allow the port through Windows Firewall:");
       console.log(`       netsh advfirewall firewall add rule name="FTMS ${addr.port}" dir=in action=allow protocol=TCP localport=${addr.port}`);
+    }
+    if (tls) {
+      console.log("       self-signed cert — the headset browser will warn once; click through it to continue.");
     }
   });
   ws.attach(server as unknown as import("http").Server);
