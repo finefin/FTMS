@@ -128,7 +128,14 @@ mkcert -cert-file certs/dev-cert.pem -key-file certs/dev-key.pem <lan-ip> localh
 Point the CLI at it directly (bypasses the desktop app's own cert generation):
 
 ```bash
+# Linux / macOS
 TLS_CERT_FILE=certs/dev-cert.pem TLS_KEY_FILE=certs/dev-key.pem npm run dev
+
+# Windows CMD (note the quotes — without them a trailing space is included in the path)
+set "TLS_CERT_FILE=certs\dev-cert.pem" && set "TLS_KEY_FILE=certs\dev-key.pem" && npm run dev
+
+# Windows PowerShell
+$env:TLS_CERT_FILE="certs\dev-cert.pem"; $env:TLS_KEY_FILE="certs\dev-key.pem"; npm run dev
 ```
 
 The server itself now trusts this cert (`mkcert -install` adds the CA to the local
