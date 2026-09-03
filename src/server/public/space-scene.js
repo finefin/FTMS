@@ -1,21 +1,18 @@
 (function () {
   // =====================================================================
   // space-scene.js
-  // A flight from Earth to the Moon at true distances, driven by live FTMS
-  // telemetry:
+  // A flight from an Earth-orbiting space station to a Moon-orbiting one,
+  // at true distances, driven by live FTMS telemetry:
   //   * speed  -> velocity through space (real km/h x WARP_FACTOR)
   //   * power  -> engine thrust: exhaust glow and streak intensity
   //
-  // Scale is 1 world unit = 1000 km, and every body radius and separation
-  // below is the real figure. The Moon therefore subtends ~0.55 deg at
-  // departure, just as it does from Earth, and grows to fill the view on
-  // approach — the sense of having crossed real distance is genuine.
+  // The camera starts inside the hub of Space Station V (the double-wheel
+  // rotating station from 2001). When the rider starts pedalling, the ship
+  // undocks and accelerates out of the station, ramps up gradually, and
+  // crosses to the Moon.
   //
-  // The warp streaks are the one deliberate lie, and they have to be: at
-  // true scale 1.5 million km/h is 0.4 units/s, which reads as completely
-  // motionless. Streak speed is therefore its own mapping (see
-  // STREAK_UNITS_PER_KMH) tuned purely so velocity is legible. Distance
-  // travelled, time remaining and the Moon's growth all stay honest.
+  // Scale is 1 world unit = 1000 km. The station geometry is intentionally
+  // oversized relative to reality so it is visible at this cosmic scale.
   // =====================================================================
 
   // --- The solar system, in kilometres ---
@@ -24,25 +21,26 @@
   var MOON_RADIUS_KM = 1737;
   var EARTH_MOON_KM = 384400;   // mean centre-to-centre distance
 
-  // Depart from low orbit rather than the planet's centre, and finish in
-  // lunar orbit rather than inside the Moon.
-  var DEPART_KM = 20000;
-  var ARRIVE_KM = 5000;
+  var EARTH_ORBIT_KM = 400;
+  var MOON_ORBIT_KM = 100;
+  var DEPART_KM = EARTH_RADIUS_KM + EARTH_ORBIT_KM;
+  var ARRIVE_KM = MOON_RADIUS_KM + MOON_ORBIT_KM;
 
-  // Real km/h from the machine is multiplied by this to get ship velocity.
-  // 30 km/h becomes 1.5 million km/h (~0.14% of light speed), which crosses
-  // the 359,400 km leg in about 15 minutes of riding.
   var WARP_FACTOR = 50000;
+
+  // --- Acceleration model ---
+  // When the rider starts pedalling the ship does not jump to full speed.
+  // Speed ramps up exponentially toward the target; this half-life (in
+  // seconds) controls how fast. 3 s means the ship reaches half-speed in
+  // 3 s, ~94 % in 10 s.
+  var ACCEL_HALF_LIFE = 3;
 
   // --- Warp starfield ---
   var STAR_COUNT = 1900;
-  var STAR_RADIUS = 70;     // spread perpendicular to the flight axis
-  var STAR_DEPTH = 260;     // spawn distance ahead
-  var STAR_NEAR = 90;       // recycle only well behind the camera, so looking
-                            // back still shows stars receding
-  // Ship km/h -> units/s for the streaks only. See the note above.
+  var STAR_RADIUS = 70;
+  var STAR_DEPTH = 260;
+  var STAR_NEAR = 90;
   var STREAK_UNITS_PER_KMH = 1 / 20000;
-  // Seconds of travel a streak represents; longer = more Star Trek.
   var STREAK_SECONDS = 0.30;
   var STREAK_MIN = 0.05;
   var STREAK_MAX = 55;
@@ -50,15 +48,9 @@
   var SPEED_SMOOTH = 0.04;
   var THRUST_SMOOTH = 0.08;
 
-  // Once the leg is complete the ship is station-keeping in lunar orbit, so
-  // transit velocity winds down instead of continuing to report a burn that
-  // is no longer happening. A little residual drift keeps the starfield alive
-  // without pretending we are still crossing space.
   var ARRIVAL_EASE = 0.02;
   var ORBIT_DRIFT_KMH = 20000;
 
-  // Sunlight comes from off to port and slightly above, so both bodies show
-  // a terminator instead of reading as flat discs.
   var SUN_DIR = new THREE.Vector3(-0.75, 0.35, -0.55).normalize();
 
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -66,15 +58,12 @@
   // ---------------------------------------------------------------------
   // Procedural body textures (no external assets)
   // ---------------------------------------------------------------------
-  // An irregular closed shape. The outline runs as quadratics through the
-  // midpoints of a jittered polygon, so coastlines come out organic instead
-  // of visibly faceted.
   function blob(ctx, cx, cy, r, sides, jitter, color) {
     var pts = [];
     for (var i = 0; i < sides; i++) {
       var a = (i / sides) * Math.PI * 2;
       var rr = r * (1 - jitter + Math.random() * jitter * 2);
-      pts.push([cx + Math.cos(a) * rr * 1.7, cy + Math.sin(a) * rr]);  // x stretched for equirect
+      pts.push([cx + Math.cos(a) * rr * 1.7, cy + Math.sin(a) * rr]);
     }
     ctx.beginPath();
     var last = pts[sides - 1], first = pts[0];
@@ -104,7 +93,7 @@
     var greens = ['#1f6b33', '#2b7d3c', '#3d7a35', '#6b7a3a', '#8a7c4a'];
     for (var i = 0; i < 26; i++) {
       var cx = Math.random() * w;
-      var cy = h * 0.18 + Math.random() * h * 0.64;   // keep off the poles
+      var cy = h * 0.18 + Math.random() * h * 0.64;
       var r = 18 + Math.random() * 52;
       blob(ctx, cx, cy, r, 14, 0.45, greens[(Math.random() * greens.length) | 0]);
       for (var j = 0; j < 3; j++) {
@@ -113,7 +102,6 @@
       }
     }
 
-    // Ice caps.
     ctx.fillStyle = '#eef6ff';
     ctx.fillRect(0, 0, w, 22);
     ctx.fillRect(0, h - 26, w, 26);
@@ -122,7 +110,6 @@
       blob(ctx, Math.random() * w, h - 28 - Math.random() * 16, 8 + Math.random() * 16, 10, 0.5, '#eef6ff');
     }
 
-    // Cloud deck.
     ctx.globalAlpha = 0.42;
     for (i = 0; i < 70; i++) {
       blob(ctx, Math.random() * w, Math.random() * h, 10 + Math.random() * 34, 12, 0.6, '#ffffff');
@@ -143,7 +130,6 @@
     ctx.fillStyle = '#9a9a97';
     ctx.fillRect(0, 0, w, h);
 
-    // Maria: the big dark basalt plains.
     ctx.globalAlpha = 0.55;
     for (var i = 0; i < 12; i++) {
       blob(ctx, Math.random() * w, h * 0.2 + Math.random() * h * 0.6,
@@ -151,7 +137,6 @@
     }
     ctx.globalAlpha = 1;
 
-    // Craters: dark floor, bright rim.
     for (i = 0; i < 420; i++) {
       var cx = Math.random() * w, cy = Math.random() * h;
       var r = 2 + Math.random() * Math.random() * 26;
@@ -198,8 +183,6 @@
   }
 
   function makeAtmosphere(radiusUnits, color) {
-    // A back-facing additive shell reads as a rim of atmosphere without
-    // needing a custom shader.
     var mesh = new THREE.Mesh(
       new THREE.SphereGeometry(radiusUnits * 1.035, 48, 32),
       new THREE.MeshBasicMaterial({
@@ -210,8 +193,6 @@
     return mesh;
   }
 
-  // A soft round dot. Without a map, PointsMaterial draws hard squares, which
-  // read as blocky pixels rather than stars.
   function makeDotTexture() {
     var size = 64;
     var cv = document.createElement('canvas');
@@ -237,7 +218,6 @@
       pos[i * 3] = R * s * Math.cos(th);
       pos[i * 3 + 1] = R * s * Math.sin(th);
       pos[i * 3 + 2] = R * u;
-      // Mostly white-blue with a scatter of warm stars.
       var t = Math.random();
       c.setHSL(t < 0.78 ? 0.58 : 0.08, 0.15 + Math.random() * 0.3, 0.6 + Math.random() * 0.35);
       col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
@@ -253,16 +233,12 @@
   }
 
   function makeBackgroundStars() {
-    // Fixed stars: far enough away that crossing the leg produces no parallax,
-    // which is exactly right at these distances. Three layers of differing
-    // size give the field depth, since sizeAttenuation is off and a single
-    // Points object can only draw one size.
     var group = new THREE.Group();
     var dot = makeDotTexture();
     var R = 4200;
-    group.add(starLayer(1500, R, 3.0, 0.55, dot));   // faint background
-    group.add(starLayer(520, R, 5.0, 0.75, dot));    // mid
-    group.add(starLayer(120, R, 9.0, 0.95, dot));    // a few bright ones
+    group.add(starLayer(1500, R, 3.0, 0.55, dot));
+    group.add(starLayer(520, R, 5.0, 0.75, dot));
+    group.add(starLayer(120, R, 9.0, 0.95, dot));
     return group;
   }
 
@@ -281,21 +257,156 @@
     return group;
   }
 
+  // ---------------------------------------------------------------------
+  // Space Station V — the double-wheel rotating station from 2001
+  // ---------------------------------------------------------------------
+  // Two counter-rotating toroidal rings connected by spokes to a central
+  // hub.  The camera starts inside the hub looking down the flight axis;
+  // when the rider starts pedalling the ship undocks and the station
+  // slides away behind.
+  var STATION_HULL  = new THREE.MeshLambertMaterial({ color: 0xc8ccd0 });
+  var STATION_DARK  = new THREE.MeshLambertMaterial({ color: 0x555a60 });
+  var STATION_ACCENT = new THREE.MeshLambertMaterial({ color: 0xff6622 });
+
+  function makeStationV() {
+    var g = new THREE.Group();
+
+    // --- Outer ring (larger, rotates +Y) --------------------------------
+    var ring1 = new THREE.Group();
+    var torus1 = new THREE.Mesh(
+      new THREE.TorusGeometry(4.5, 0.16, 16, 80), STATION_HULL);
+    torus1.rotation.x = Math.PI / 2;
+    ring1.add(torus1);
+    g.add(ring1);
+
+    // --- Inner ring (smaller, counter-rotates -Y) -----------------------
+    var ring2 = new THREE.Group();
+    var torus2 = new THREE.Mesh(
+      new THREE.TorusGeometry(3.0, 0.12, 12, 60), STATION_DARK);
+    torus2.rotation.x = Math.PI / 2;
+    ring2.add(torus2);
+    g.add(ring2);
+
+    // --- Central hub / spine --------------------------------------------
+    var hubLen = 2.8;
+    var hubR = 0.35;
+    var hub = new THREE.Mesh(
+      new THREE.CylinderGeometry(hubR, hubR, hubLen, 20, 1, true), STATION_HULL);
+    hub.rotation.x = Math.PI / 2;
+    g.add(hub);
+
+    // Hub end caps
+    var capGeo = new THREE.CircleGeometry(hubR, 20);
+    [-hubLen / 2, hubLen / 2].forEach(function (z) {
+      var cap = new THREE.Mesh(capGeo, STATION_DARK);
+      cap.position.z = z;
+      if (z < 0) cap.rotation.y = Math.PI;
+      g.add(cap);
+    });
+
+    // Interior lighting — point lights inside the hub illuminate the
+    // corridor and ring interior so the "inside" experience reads.
+    var hubLight = new THREE.PointLight(0xccddff, 1.2, 12);
+    hubLight.position.set(0, 0, 0);
+    g.add(hubLight);
+    var warmLight = new THREE.PointLight(0xffe8cc, 0.6, 8);
+    warmLight.position.set(0, 0, 1.2);
+    g.add(warmLight);
+
+    // --- Docking corridor (extends from the hub along +Z) ---------------
+    var corrLen = 1.4;
+    var corr = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.12, corrLen, 10, 1, true), STATION_DARK);
+    corr.rotation.x = Math.PI / 2;
+    corr.position.z = hubLen / 2 + corrLen / 2;
+    g.add(corr);
+
+    // Airlock ring at the corridor end
+    var airlock = new THREE.Mesh(
+      new THREE.TorusGeometry(0.16, 0.015, 8, 16), STATION_ACCENT);
+    airlock.position.z = hubLen / 2 + corrLen;
+    g.add(airlock);
+
+    // --- Spokes: hub → outer ring ---------------------------------------
+    var spokeOuter = new THREE.CylinderGeometry(0.03, 0.03, 4.2, 6);
+    for (var i = 0; i < 12; i++) {
+      var a = (i / 12) * Math.PI * 2;
+      var spoke = new THREE.Mesh(spokeOuter, STATION_HULL);
+      spoke.position.set(Math.cos(a) * 2.3, Math.sin(a) * 2.3, 0);
+      spoke.rotation.z = a - Math.PI / 2;
+      g.add(spoke);
+    }
+
+    // --- Spokes: hub → inner ring ---------------------------------------
+    var spokeInner = new THREE.CylinderGeometry(0.022, 0.022, 2.7, 5);
+    for (var i = 0; i < 8; i++) {
+      var a = (i / 8) * Math.PI * 2 + Math.PI / 16;
+      var spoke = new THREE.Mesh(spokeInner, STATION_DARK);
+      spoke.position.set(Math.cos(a) * 1.55, Math.sin(a) * 1.55, 0);
+      spoke.rotation.z = a - Math.PI / 2;
+      g.add(spoke);
+    }
+
+    // Store ring groups for rotation in tick()
+    g.userData.ring1 = ring1;
+    g.userData.ring2 = ring2;
+
+    g.userData.radius = 4.5;
+    return g;
+  }
+
+  // --- Moon orbital station (simpler, cylindrical) ----------------------
+  function makeMoonStation() {
+    var g = new THREE.Group();
+    var hull = STATION_HULL;
+
+    // Central cylinder along Z
+    var body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.3, 1.6, 12), hull);
+    body.rotation.x = Math.PI / 2;
+    g.add(body);
+
+    // Solar panel arrays — two flat panels on a truss along X
+    var panelGeo = new THREE.BoxGeometry(2.4, 0.02, 0.8);
+    var panelMat = new THREE.MeshLambertMaterial({ color: 0x2244aa });
+    [-1, 1].forEach(function (side) {
+      var p = new THREE.Mesh(panelGeo, panelMat);
+      p.position.x = side * 1.6;
+      g.add(p);
+    });
+    var truss = new THREE.Mesh(
+      new THREE.BoxGeometry(3.6, 0.04, 0.04), STATION_DARK);
+    g.add(truss);
+
+    // Docking port
+    var dp = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, 0.3, 8), STATION_ACCENT);
+    dp.rotation.x = Math.PI / 2;
+    dp.position.z = 1.0;
+    g.add(dp);
+
+    g.userData.radius = 1.6;
+    return g;
+  }
+
   AFRAME.registerComponent('space-scene', {
     init: function () {
       var root = this.el.object3D;
 
       this._posKm = DEPART_KM;
       this._targetKm = EARTH_MOON_KM - ARRIVE_KM;
-      this._speedKmh = 0;         // real machine speed, smoothed
+      this._speedKmh = 0;
       this._targetSpeed = 0;
-      this._thrust = 0;           // 0..1, from power
+      this._thrust = 0;
       this._targetThrust = 0;
       this._arrived = false;
-      this._arrivalEase = 1;    // 1 = under way, 0 = arrived and stopped
+      this._arrivalEase = 1;
       this._shipKmh = 0;
 
-      // Lighting: one sun, plus a little fill so night sides are not voids.
+      // Acceleration ramp: 0 → 1 exponentially once the rider starts pedalling.
+      this._accel = 0;
+
+      // Lighting
       var sun = new THREE.DirectionalLight(0xfff4e2, 2.6);
       sun.position.copy(SUN_DIR).multiplyScalar(500);
       root.add(sun);
@@ -311,6 +422,17 @@
       this.moon = makeBody(MOON_RADIUS_KM, makeMoonTexture());
       root.add(this.moon);
 
+      // Space Station V — the camera starts inside its hub.
+      // At departure the station sits between the camera (origin) and
+      // Earth; as the ship accelerates it slides backward and out of view.
+      this.earthStation = makeStationV();
+      root.add(this.earthStation);
+
+      // Moon orbital station — sits between camera and Moon, slides
+      // backward as we approach (Moon closes in from -Z).
+      this.moonStation = makeMoonStation();
+      root.add(this.moonStation);
+
       this.buildWarp();
       root.add(this.warp);
 
@@ -322,7 +444,7 @@
       this._sx = new Float32Array(n);
       this._sy = new Float32Array(n);
       this._sz = new Float32Array(n);
-      this._sb = new Float32Array(n);   // per-star base brightness
+      this._sb = new Float32Array(n);
 
       for (var i = 0; i < n; i++) this.spawnStar(i, true);
 
@@ -342,8 +464,6 @@
     },
 
     spawnStar: function (i, anywhere) {
-      // Uniform over the disc, with a small hole so the vanishing point does
-      // not clog with stars that never move on screen.
       var a = Math.random() * Math.PI * 2;
       var r = 1.5 + Math.sqrt(Math.random()) * STAR_RADIUS;
       this._sx[i] = Math.cos(a) * r;
@@ -354,13 +474,11 @@
       this._sb[i] = 0.45 + Math.random() * 0.55;
     },
 
-    /** Live telemetry in, from space.js. */
     setFlightData: function (fd) {
       if (fd.speed != null && !isNaN(fd.speed)) this._targetSpeed = Math.max(0, fd.speed);
       if (fd.thrust != null && !isNaN(fd.thrust)) this._targetThrust = clamp(fd.thrust, 0, 1);
     },
 
-    /** Navigation readout for the HUD. */
     nav: function () {
       var shipKmh = this._shipKmh;
       var total = this._targetKm - DEPART_KM;
@@ -379,16 +497,26 @@
         earthDistanceKm: this._posKm,
         moonDistanceKm: Math.max(0, EARTH_MOON_KM - this._posKm),
         moonRadiusKm: MOON_RADIUS_KM,
-        warpFactor: WARP_FACTOR
+        warpFactor: WARP_FACTOR,
+        arriveKm: ARRIVE_KM
       };
     },
 
-    /** Place both bodies for the current position along the leg. */
+    // Place bodies and stations for the current position along the leg.
+    // The ship stays at the origin; everything slides past it.
     layout: function () {
-      // Bodies sit on the flight axis; the ship stays at the origin and the
-      // system slides past, which keeps precision sane over 384,400 km.
       this.earth.position.set(0, 0, this._posKm / KM_PER_UNIT);
       this.moon.position.set(0, 0, -(EARTH_MOON_KM - this._posKm) / KM_PER_UNIT);
+
+      // Earth station sits just ahead of Earth (between camera and Earth).
+      // It starts at ~0 km from the camera (inside the hub) and slides
+      // backward as the ship undocks and accelerates.
+      var stationZ = Math.max(0, (this._posKm - DEPART_KM) / KM_PER_UNIT - 0.4);
+      this.earthStation.position.set(0, 0, stationZ);
+
+      // Moon station sits just ahead of the Moon (between camera and Moon).
+      var moonStationZ = Math.max(0, (EARTH_MOON_KM - this._posKm) / KM_PER_UNIT - 1.8);
+      this.moonStation.position.set(0, 0, -moonStationZ);
     },
 
     tick: function (time, timeDelta) {
@@ -397,9 +525,18 @@
       this._speedKmh += (this._targetSpeed - this._speedKmh) * SPEED_SMOOTH;
       this._thrust += (this._targetThrust - this._thrust) * THRUST_SMOOTH;
 
+      // --- Acceleration ramp ---
+      // Once the rider starts pedalling (_targetSpeed > 0) the ship
+      // accelerates exponentially toward full speed.  This makes the
+      // departure feel like the ship is powering up and pulling away
+      // from the station, rather than teleporting to full velocity.
+      if (this._targetSpeed > 0.5 && this._accel < 0.999) {
+        this._accel += (1 - this._accel) * (1 - Math.pow(0.5, dt / ACCEL_HALF_LIFE));
+      }
+
       // --- Travel, at real distances ---
       this._arrivalEase += ((this._arrived ? 0 : 1) - this._arrivalEase) * ARRIVAL_EASE;
-      var shipKmh = this._speedKmh * WARP_FACTOR * this._arrivalEase;
+      var shipKmh = this._speedKmh * WARP_FACTOR * this._accel * this._arrivalEase;
       this._shipKmh = shipKmh;
       this._posKm += shipKmh * (dt / 3600);
       if (this._posKm >= this._targetKm) {
@@ -408,9 +545,17 @@
       }
       this.layout();
 
-      // Slow rotation so the bodies read as solid.
+      // Slow body rotation
       this.earth.userData.mesh.rotation.y += dt * 0.02;
       this.moon.userData.mesh.rotation.y += dt * 0.005;
+
+      // Rotate station rings (Space Station V counter-rotates)
+      if (this.earthStation.userData.ring1) {
+        this.earthStation.userData.ring1.rotation.y += dt * 0.12;
+      }
+      if (this.earthStation.userData.ring2) {
+        this.earthStation.userData.ring2.rotation.y -= dt * 0.18;
+      }
 
       this.updateWarp(dt, shipKmh);
     },
@@ -420,13 +565,9 @@
       var col = this._warpCol.array;
       var n = STAR_COUNT;
 
-      // In orbit the transit is over, but a slow drift reads better than a
-      // frozen starfield.
       var streakKmh = Math.max(shipKmh, this._arrived ? ORBIT_DRIFT_KMH : 0);
-      var vis = streakKmh * STREAK_UNITS_PER_KMH;         // units/s, visual
+      var vis = streakKmh * STREAK_UNITS_PER_KMH;
       var streak = clamp(vis * STREAK_SECONDS, STREAK_MIN, STREAK_MAX);
-      // Thrust adds a little extra length and heat, so pushing harder reads
-      // in the starfield and not only on the gauge.
       streak *= 1 + this._thrust * 0.35;
       var move = vis * dt;
 
@@ -441,15 +582,12 @@
         pos[p] = x; pos[p + 1] = y; pos[p + 2] = z; p += 3;
         pos[p] = x; pos[p + 1] = y; pos[p + 2] = tail; p += 3;
 
-        // Fade in from the spawn plane and out as it sweeps past, so nothing
-        // pops into or out of existence.
         var depth = clamp((z + STAR_DEPTH) / (STAR_DEPTH * 0.55), 0, 1);
         var near = clamp((STAR_NEAR - z) / 30, 0, 1);
         var b = this._sb[i] * depth * near;
         var head = b;
         var tailB = b * 0.12;
 
-        // Head is white-hot, tail cools to blue: the Trek look.
         col[c] = head; col[c + 1] = head; col[c + 2] = head; c += 3;
         col[c] = tailB * 0.5; col[c + 1] = tailB * 0.8; col[c + 2] = tailB; c += 3;
       }

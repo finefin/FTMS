@@ -97,7 +97,7 @@
     ctx.fillText((fs.deviceLabel || 'NO DEVICE').toUpperCase(), 106, y);
 
     ctx.textAlign = 'center'; ctx.fillStyle = AMBER; ctx.font = '600 18px ' + UI_FONT;
-    ctx.fillText('SOL · LEG 01 · EARTH → MOON', CW / 2, y);
+    ctx.fillText('FTMS · EARTH ORBIT → LUNAR ORBIT', CW / 2, y);
 
     ctx.textAlign = 'right'; ctx.fillStyle = HUD_DIM; ctx.font = '500 18px ' + UI_FONT;
     ctx.fillText(fmtTime(fs.elapsed), CW - 84, y);
@@ -191,8 +191,8 @@
 
     setTracking(ctx, 4);
     ctx.font = '600 17px ' + UI_FONT;
-    ctx.textAlign = 'left'; ctx.fillStyle = HUD; ctx.fillText('EARTH', x0 - 4, y + 40);
-    ctx.textAlign = 'right'; ctx.fillStyle = AMBER; ctx.fillText('MOON', x1 + 4, y + 40);
+    ctx.textAlign = 'left'; ctx.fillStyle = HUD; ctx.fillText('EARTH ORBIT', x0 - 4, y + 40);
+    ctx.textAlign = 'right'; ctx.fillStyle = AMBER; ctx.fillText('LUNAR ORBIT', x1 + 4, y + 40);
     setTracking(ctx, 0);
 
     ctx.textAlign = 'center';
