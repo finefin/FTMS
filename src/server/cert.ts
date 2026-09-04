@@ -17,7 +17,12 @@ import { generate } from "selfsigned";
 export interface TlsMaterial {
   key: string;
   cert: string;
-  /** SHA-1 fingerprint from `selfsigned`, for cert-pinning a trust check (e.g. Electron's certificate-error handler). Not needed just to serve HTTPS. */
+  /**
+   * SHA-1 fingerprint from `selfsigned`. Informational only — not used for
+   * any trust decision (Electron's own certificate-error fingerprint is a
+   * different hash entirely, SHA-256, so comparing the two never matches;
+   * see electron/main.mjs) and not needed just to serve HTTPS.
+   */
   fingerprint?: string;
 }
 

@@ -28,22 +28,26 @@ async function main() {
   const hosts = ["localhost", "127.0.0.1", ...lanAddresses()];
   const tls = await getOrCreateCert(dataDir, hosts);
 
-  // Trust only the fingerprint of the cert we just generated — this is
-  // what lets this window load https://localhost without a warning. It has
-  // no bearing on the Quest: over the LAN it sees the same self-signed
-  // cert and still has to click through the browser's warning once.
-  app.on("certificate-error", (event, _webContents, url, _error, certificate, callback) => {
+  // Trust the cert error for this window's own navigation to its own
+  // loopback server — not by comparing fingerprints (tried that first: it
+  // never matched. selfsigned's `fingerprint` is SHA-1; Electron's
+  // Certificate.fingerprint from this event is SHA-256, a different hash
+  // of different length, so the strings can never be equal — every load
+  // silently failed and left a blank white window). This isn't a
+  // meaningful trust decision anyway: the app is loading a URL it
+  // constructed itself, on localhost, never attacker-influenced. It has no
+  // bearing on the Quest — over the LAN it goes through its own browser's
+  // separate warning-then-click-through flow, not this handler.
+  app.on("certificate-error", (event, _webContents, url, _error, _certificate, callback) => {
+    let host = "";
     try {
-      const host = new URL(url).hostname;
-      if ((host === "localhost" || host === "127.0.0.1") && certificate.fingerprint === tls.fingerprint) {
-        event.preventDefault();
-        callback(true);
-        return;
-      }
+      host = new URL(url).hostname;
     } catch {
       // fall through to reject
     }
-    callback(false);
+    const trusted = host === "localhost" || host === "127.0.0.1";
+    if (trusted) event.preventDefault();
+    callback(trusted);
   });
 
   ftmsApp = await startFtmsApp({ port: PORT, tls });
@@ -58,6 +62,18 @@ async function main() {
       nodeIntegration: false,
     },
   });
+
+  // Without this, a failed load (wrong port, server not actually up yet,
+  // a future cert-trust regression) just leaves a silent blank window —
+  // exactly what happened here. Surface it instead of hiding it again.
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[electron] failed to load ${validatedURL}: ${errorDescription} (${errorCode})`);
+    dialog.showErrorBox(
+      "FTMS window failed to load",
+      `${validatedURL}\n\n${errorDescription} (${errorCode})\n\nThe server itself may still be running — check the terminal/log output.`
+    );
+  });
+
   win.loadURL(`https://localhost:${PORT}/`);
 }
 

@@ -462,16 +462,28 @@ noble types keep the compiler quiet about it.
 the easiest thing in the project to test, and the place where a spec misreading would
 be silent.
 
-**Desktop app — real, but unverified end to end.** The Electron shell, self-signed
-cert generation/caching, and the `@abandonware/noble` backend all work as designed —
-each was exercised directly (cert SAN coverage and regeneration, a live HTTPS server
-serving every route with the generated cert, `@abandonware/noble` loading and
-exposing the expected API shape). What's *not* verified, because none of it is
-possible from the environment this was built in: a real BLE device connecting over
+**Electron window loaded blank** (fixed). `certificate-error`'s trust check compared
+`certificate.fingerprint` (Electron's own, SHA-256) against `selfsigned`'s
+`.fingerprint` (SHA-1) — different hash, different length, so the comparison could
+never succeed. Every load of the app's own `https://localhost` window failed the cert
+check silently, leaving a blank window with no error shown. `electron/main.mjs` now
+trusts the cert error by hostname (`localhost`/`127.0.0.1`) instead of fingerprint —
+this is the app's own navigation to a URL it built itself, not attacker-influenced
+content, so pinning to an exact fingerprint was never actually buying safety, just
+introducing a fragile string comparison. A `did-fail-load` handler now also surfaces
+any future load failure as a dialog instead of a silent blank window.
+
+**Desktop app — real, but not fully verified end to end.** The Electron shell,
+self-signed cert generation/caching, and the `@abandonware/noble` backend all work as
+designed — each was exercised directly (cert SAN coverage and regeneration, a live
+HTTPS server serving every route with the generated cert, `@abandonware/noble` loading
+and exposing the expected API shape), and the white-screen bug above was found and
+fixed from a real Windows report. Still not verified, because none of it is possible
+from the environment this was built in: a real BLE device connecting over
 `@abandonware/noble` on macOS or Linux; a packaged installer actually launching per
 platform, including whether `noble-winrt`/`@abandonware/noble`'s native builds survive
 rebuilding against Electron's Node ABI; and — the assumption the whole headset flow
 leans on — whether a Quest's browser accepts a click-through self-signed cert as a
 secure context for WebXR, versus rejecting it outright (the mkcert fallback in
 [Desktop app](#desktop-app-vr-headset-use) exists for that case). Worth testing that
-last one first, before relying on the rest.
+last one next.
