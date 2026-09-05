@@ -61,6 +61,38 @@
     .scan-btn:hover:not(:disabled) { opacity: 0.85; }
     .scan-btn:active:not(:disabled) { transform: scale(0.96); }
     .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .speed-mult {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      white-space: nowrap;
+    }
+    .speed-mult .step {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
+      background: var(--card);
+      color: var(--text);
+      font-size: 1.15rem;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .speed-mult .step:hover { border-color: var(--accent); color: var(--accent); }
+    .speed-mult .step:active { transform: scale(0.94); }
+    .speed-mult .val {
+      min-width: 52px;
+      text-align: center;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
     .scan-result {
       color: var(--muted);
       font-size: 0.85rem;
@@ -131,6 +163,14 @@
       display: flex;
       gap: 16px;
       align-items: center;
+      text-decoration: none;
+      color: inherit;
+      cursor: pointer;
+      transition: border-color 0.15s ease, transform 0.15s ease;
+    }
+    .headset-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
     }
     .headset-card img {
       width: 96px;
@@ -176,14 +216,20 @@
     <span class="dot" id="statusDot"></span>
     <span id="statusText">Disconnected</span>
     <button id="scanBtn" class="scan-btn" title="Scans for a device and connects to the first one found — also what to press if the machine drops.">Reconnect</button>
-    <span id="deviceName" style="margin-left:auto"></span>
+    <span id="deviceName"></span>
+    <div class="speed-mult" title="Scales how fast the world moves in the Ride/Flight scenes. 1x is the speed the machine reports; +/- step by powers of ten.">
+      Speed
+      <button type="button" id="speedMultMinus" class="step" aria-label="decrease speed multiplier">−</button>
+      <span id="speedMultValue" class="val">1x</span>
+      <button type="button" id="speedMultPlus" class="step" aria-label="increase speed multiplier">+</button>
+    </div>
   </div>
   <div class="scan-result" id="scanResult"></div>
   <div class="device-info" id="deviceInfo"></div>
 
   <div class="headset-section" id="headsetSection" style="display:none">
-    <h2>Connect from your headset</h2>
-    <div class="hint">Same Wi-Fi network as this computer. Open the URL below, or scan its code — the browser will warn about the certificate once; that's expected for a self-signed cert, click through it.</div>
+    <h2>Connect your headset, phone or tablet</h2>
+    <div class="hint">The scenes run in any browser — no app needed. On the same Wi-Fi network as this computer, open the URL below or scan its code, or click the card to open the scene right here. The browser will warn about the certificate once; that's expected for a self-signed cert, click through it.</div>
     <div class="headset-cards" id="headsetCards"></div>
   </div>
 
@@ -244,7 +290,7 @@
       ],
     };
 
-    const ws = new WebSocket(`ws://${location.host}/ws`);
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
     let chart = null;
     let currentEquipment = null;
     let timeLabels = [];
@@ -279,7 +325,7 @@
         ["Cadence", "instantaneousCadence", "rpm", (v) => v == null ? "—" : v.toFixed(0)],
         ["Power", "instantaneousPower", "W", (v) => v ?? "—"],
         ["Distance", "totalDistance", "", formatDistance],
-        ["Resistance", "resistanceLevel", "", (v) => v ?? "—"],
+        // ["Resistance", "resistanceLevel", "", (v) => v ?? "—"], // kept for later
         ["Heart Rate", "heartRate", "bpm", (v) => v ?? "—"],
         ["Elapsed", "elapsedTime", "", formatTime],
       ],
@@ -432,6 +478,8 @@
         renderMetrics(msg.equipment, msg.data);
       } else if (msg.type === "state") {
         setState(msg.state, msg.deviceName);
+      } else if (msg.type === "settings") {
+        syncFromServer(msg.speedMultiplier);
       }
     };
 
@@ -446,6 +494,46 @@
 
     ws.onopen = () => { /* wait for server state */ };
     ws.onerror = () => setState("error");
+
+    // --- Speed multiplier -------------------------------------------------
+    // Steps by powers of ten; 1x is the speed the machine actually reports.
+    const SPEED_MULT_MIN_EXP = -1; // 0.1x
+    const SPEED_MULT_MAX_EXP = 6;  // 1,000,000x
+    const speedMultValue = document.getElementById("speedMultValue");
+    const speedMultMinus = document.getElementById("speedMultMinus");
+    const speedMultPlus = document.getElementById("speedMultPlus");
+    let speedMultExp = 0;
+
+    function fmtSpeedMult(exp) {
+      const v = Math.pow(10, exp);
+      const s = v < 10 ? String(v) : v.toLocaleString("en-US");
+      return s + "x";
+    }
+
+    function syncFromServer(value) {
+      if (typeof value !== "number" || !isFinite(value) || value <= 0) return;
+      speedMultExp = Math.max(SPEED_MULT_MIN_EXP, Math.min(SPEED_MULT_MAX_EXP, Math.round(Math.log10(value))));
+      if (speedMultValue) speedMultValue.textContent = fmtSpeedMult(speedMultExp);
+    }
+
+    function setSpeedMult(exp) {
+      const clamped = Math.max(SPEED_MULT_MIN_EXP, Math.min(SPEED_MULT_MAX_EXP, exp));
+      if (clamped === speedMultExp) return;
+      speedMultExp = clamped;
+      if (speedMultValue) speedMultValue.textContent = fmtSpeedMult(speedMultExp);
+      fetch("/api/settings?speedMultiplier=" + encodeURIComponent(Math.pow(10, speedMultExp)))
+        .then((r) => (r.ok ? r.json() : null))
+        .then((s) => { if (s) syncFromServer(s.speedMultiplier); })
+        .catch(() => {});
+    }
+
+    if (speedMultMinus) speedMultMinus.addEventListener("click", () => setSpeedMult(speedMultExp - 1));
+    if (speedMultPlus) speedMultPlus.addEventListener("click", () => setSpeedMult(speedMultExp + 1));
+
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => { if (s) syncFromServer(s.speedMultiplier); })
+      .catch(() => {});
 
     const scanBtn = document.getElementById("scanBtn");
     const scanResult = document.getElementById("scanResult");
@@ -503,8 +591,13 @@
         cards.innerHTML = "";
         for (const view of HEADSET_VIEWS) {
           const url = base + view.path;
-          const card = document.createElement("div");
+          // Clicking opens the scene in the current window — in the desktop
+          // app that navigates the Electron window, in a phone/tablet browser
+          // it navigates that tab. External devices still use the QR/net URL.
+          const card = document.createElement("a");
           card.className = "headset-card";
+          card.href = view.path;
+          card.title = "Open " + view.name + " here";
 
           const img = document.createElement("img");
           if (typeof qrcode === "function") {

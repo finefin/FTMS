@@ -12,6 +12,7 @@ import { createServer as createHttpsServer } from "https";
 import { FTMSClient } from "../ftms/client.js";
 import type { WsServer } from "./ws.js";
 import type { TlsMaterial } from "./cert.js";
+import { SettingsStore } from "./settings.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HTML_PATH = join(__dirname, "public", "index.html");
@@ -45,7 +46,8 @@ function serveAsset(c: any, name: string) {
 export function createApp(
   client: FTMSClient,
   ws: WsServer,
-  info?: { https?: boolean; port?: number }
+  info?: { https?: boolean; port?: number },
+  settings: SettingsStore = new SettingsStore()
 ) {
   const app = new Hono();
 
@@ -82,12 +84,36 @@ export function createApp(
   // not to shadow the /api routes registered above.
   app.get("/:name{[A-Za-z0-9_-]+\\.js}", (c) => serveAsset(c, c.req.param("name")));
 
+  // 3D models under /assets (the repo's assets/ folder is copied into
+  // public/assets by scripts/copy-assets.mjs). Hono v4's /* wildcard
+  // matches but exposes no param, so recover the remainder from c.req.path.
+  // Plain filename characters only, so it cannot be walked out of the dir.
+  app.get("/assets/*", (c) => {
+    const name = c.req.path.slice("/assets/".length);
+    if (!name || name.includes("..") || !/^[A-Za-z0-9_./-]+$/.test(name)) {
+      return c.text("bad path", 400);
+    }
+    return serveAsset(c, "assets/" + name);
+  });
+
   app.get("/api/status", (c) => {
     return c.json({
       connected: client.status === "connected",
       device: client.deviceInfo?.name ?? null,
       equipment: client.equipment,
     });
+  });
+
+  // Saved dashboard settings (speed multiplier). A GET with a
+  // ?speedMultiplier=... query saves and broadcasts; a plain GET reads.
+  app.get("/api/settings", (c) => {
+    const q = c.req.query("speedMultiplier");
+    if (q !== undefined) {
+      const next = settings.set({ speedMultiplier: Number(q) });
+      ws.emitSettings(next.speedMultiplier);
+      return c.json(next);
+    }
+    return c.json(settings.get());
   });
 
   // What the dashboard's "connect from your headset" panel needs to build
@@ -166,10 +192,11 @@ export async function startServer(
   ws: WsServer,
   port = 3000,
   hostname?: string,
-  tls?: TlsMaterial
+  tls?: TlsMaterial,
+  settings: SettingsStore = new SettingsStore()
 ): Promise<import("http").Server> {
   const scheme = tls ? "https" : "http";
-  const app = createApp(client, ws, { https: !!tls, port });
+  const app = createApp(client, ws, { https: !!tls, port }, settings);
   // With no hostname, Node binds the unspecified address (`::`, dual-stack),
   // which already accepts connections from the network. Passing HOST only
   // narrows it — e.g. HOST=127.0.0.1 to keep the server private.

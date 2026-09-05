@@ -14,6 +14,10 @@
   var SPEED_MAX = 60;      // km/h at the pedals for a full velocity bar
   var HR_MAX = 200;
 
+  // Dashboard tune: world speed vs real machine speed (speed × this; rides
+  // on top of WARP_FACTOR in space-scene.js).
+  var speedMult = 1;
+
   var state = {
     speed: 0, power: 0, heartRate: null, cadence: null,
     elapsed: null, equipment: null, device: null,
@@ -25,6 +29,7 @@
     speed: 0, power: 0, heartRate: null, cadence: null, elapsed: null,
     device: null, deviceLabel: 'No device', connection: 'idle', demo: false,
     powerMax: POWER_MAX, speedMax: SPEED_MAX, hrMax: HR_MAX,
+    speedMult: 1,
     nav: null
   };
 
@@ -58,6 +63,12 @@
     return Math.round(km).toLocaleString('en-US');
   }
 
+  // The dashboard speed-multiplier setting, as the "warp ×N" readout.
+  function fmtWarp(m) {
+    if (!isFinite(m) || m <= 0) return '1';
+    return m < 10 ? String(m) : Math.round(m).toLocaleString('en-US');
+  }
+
   // -------------------------------------------------------------------
   // Scene link
   // -------------------------------------------------------------------
@@ -70,7 +81,7 @@
     var c = sceneComponent();
     if (!c) return;
     c.setFlightData({
-      speed: state.speed,
+      speed: state.speed * speedMult,
       thrust: clamp01((state.power || 0) / POWER_MAX)
     });
   }
@@ -144,6 +155,7 @@
     setText('v-cadence', state.cadence == null ? '—' : String(Math.round(state.cadence)));
     setText('v-hr', state.heartRate == null ? '—' : String(Math.round(shown.hr)));
     setText('v-legspeed', shown.speed.toFixed(1));
+    setText('v-warp', fmtWarp(speedMult));
     setText('v-clock', fmtTime(state.elapsed));
     setText('v-device', deviceLabel());
 
@@ -188,6 +200,7 @@
     fs.speed = state.speed; fs.power = state.power; fs.heartRate = state.heartRate;
     fs.cadence = state.cadence; fs.elapsed = state.elapsed; fs.device = state.device;
     fs.deviceLabel = deviceLabel(); fs.connection = state.connection; fs.demo = state.demo;
+    fs.speedMult = speedMult;
   }
 
   // -------------------------------------------------------------------
@@ -236,7 +249,16 @@
       try { msg = JSON.parse(e.data); } catch (err) { return; }
       if (msg.type === 'data') { sawRealData = true; applyData(msg.equipment, msg.data || {}, false); }
       else if (msg.type === 'state') handleState(msg);
+      else if (msg.type === 'settings') {
+        if (typeof msg.speedMultiplier === 'number') speedMult = msg.speedMultiplier;
+      }
     };
+  }
+
+  function loadSettings() {
+    fetch('/api/settings').then(function (r) { return r.json(); }).then(function (s) {
+      if (s && typeof s.speedMultiplier === 'number') speedMult = s.speedMultiplier;
+    }).catch(function () {});
   }
 
   // Synthetic flight when there is no server at all, so the view is not a
@@ -291,6 +313,7 @@
   function boot() {
     scene = document.querySelector('a-scene');
     connect();
+    loadSettings();
     setTimeout(startDemo, 4000);
   }
 

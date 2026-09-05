@@ -46,8 +46,10 @@
       "main": "electron/main.mjs"
     },
     "asarUnpack": [
-      "**/*.node"
+      "**/*.node",
+      "**/node_modules/noble-winrt/**"
     ],
+    "afterPack": "scripts/afterPack.mjs",
     "mac": {
       "target": ["dmg", "zip"],
       "category": "public.app-category.healthcare-fitness",

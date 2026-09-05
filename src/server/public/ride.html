@@ -101,6 +101,24 @@
       background: rgba(255, 54, 200, 0.08);
     }
 
+    /* Windowed/browser-only: go back to the dashboard. Hidden in VR along
+       with the rest of #hud. */
+    .dash-btn {
+      margin-left: 10px;
+      padding: 4px 11px;
+      pointer-events: auto;
+      border: 1px solid rgba(0, 246, 255, 0.45);
+      border-radius: 3px;
+      background: rgba(0, 246, 255, 0.10);
+      color: var(--cyan);
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      text-decoration: none;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .dash-btn:hover { background: rgba(0, 246, 255, 0.22); color: #fff; }
+
     /* ================= Power curve strip ================= */
     .curve {
       position: absolute;
@@ -379,6 +397,7 @@
       <span class="lamp" id="lamp"></span>
       <span class="dev" id="v-device">No device</span>
       <span class="chip" id="v-equipment">—</span>
+      <a class="dash-btn" href="/">⏻ Dashboard</a>
     </div>
 
     <div class="curve">

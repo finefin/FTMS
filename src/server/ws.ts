@@ -10,13 +10,15 @@ type WsMessage =
   | { type: "data"; equipment: string; data: Record<string, unknown>; timestamp: number }
   | { type: "state"; state: ConnectionState; deviceName?: string }
   | { type: "status"; connected: boolean }
-  | { type: "devices"; devices: DiscoveredDevice[] };
+  | { type: "devices"; devices: DiscoveredDevice[] }
+  | { type: "settings"; speedMultiplier: number };
 
 export class WsServer {
   private wss: WebSocketServer | null = null;
   private clients = new Set<WebSocket>();
   private lastData: WsMessage | null = null;
   private lastState: WsMessage | null = null;
+  private lastSettings: WsMessage | null = null;
 
   attach(server: Server) {
     if (this.wss) return;
@@ -25,6 +27,7 @@ export class WsServer {
       this.clients.add(ws);
       if (this.lastData) this.send(ws, this.lastData);
       if (this.lastState) this.send(ws, this.lastState);
+      if (this.lastSettings) this.send(ws, this.lastSettings);
 
       ws.on("close", () => this.clients.delete(ws));
       ws.on("error", () => this.clients.delete(ws));
@@ -70,6 +73,12 @@ export class WsServer {
 
   emitDevices(devices: DiscoveredDevice[]) {
     this.broadcast({ type: "devices", devices });
+  }
+
+  emitSettings(speedMultiplier: number) {
+    const message: WsMessage = { type: "settings", speedMultiplier };
+    this.lastSettings = message;
+    this.broadcast(message);
   }
 
   close() {

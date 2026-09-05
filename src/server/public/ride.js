@@ -18,6 +18,9 @@
   var SPEED_MAX = 60;   // km/h at a full speed bar
   var HR_MAX = 200;
 
+  // Dashboard tune: world scroll speed vs real machine speed (speed × this).
+  var speedMult = 1;
+
   // Seconds of power history kept for the HUD sparkline.
   var SPARK_WINDOW = 120;
   var SPARK_HZ = 4;
@@ -301,7 +304,7 @@
     var land = document.querySelector('[ride-landscape]');
     if (land && land.components && land.components['ride-landscape']) {
       land.components['ride-landscape'].setFitnessData({
-        speed: state.speed,
+        speed: state.speed * speedMult,
         heartRate: state.heartRate,
         value: state.value
       });
@@ -378,7 +381,16 @@
       try { msg = JSON.parse(e.data); } catch (err) { return; }
       if (msg.type === 'data') handleData(msg);
       else if (msg.type === 'state') handleState(msg);
+      else if (msg.type === 'settings') {
+        if (typeof msg.speedMultiplier === 'number') speedMult = msg.speedMultiplier;
+      }
     };
+  }
+
+  function loadSettings() {
+    fetch('/api/settings').then(function (r) { return r.json(); }).then(function (s) {
+      if (s && typeof s.speedMultiplier === 'number') speedMult = s.speedMultiplier;
+    }).catch(function () {});
   }
 
   // -------------------------------------------------------------------
@@ -481,6 +493,7 @@
     var scene = document.querySelector('a-scene');
     if (scene) wireVrToggle(scene);
     connect();
+    loadSettings();
     setTimeout(startDemo, 4000);
   }
 

@@ -48,6 +48,12 @@
     return km == null || isNaN(km) ? '--' : Math.round(km).toLocaleString('en-US');
   }
 
+  // The dashboard speed-multiplier setting, as the "warp ×N" readout.
+  function fmtWarp(m) {
+    if (!isFinite(m) || m <= 0) return '1';
+    return m < 10 ? String(m) : Math.round(m).toLocaleString('en-US');
+  }
+
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
@@ -367,10 +373,10 @@
       drawReticle(ctx);
 
       drawReadout(ctx, {
-        x: 96, align: 'left', label: 'VELOCITY',
-        value: Math.round(sh.kms).toLocaleString('en-US'), unit: '*10⁶ km/s',
+        x: 96, align: 'left', label: 'PEDAL SPEED',
+        value: (fs.speed == null ? 0 : fs.speed).toFixed(1), unit: 'km/h',
         accent: HUD, pct: clamp01((fs.speed || 0) / (fs.speedMax || 60)),
-        sub: nav ? nav.lightPct.toFixed(3) + '% c' : '--'
+        sub: (nav ? groupKm(nav.shipKms) + ' *10⁶ km/s · ' : '') + 'warp ×' + fmtWarp(fs.speedMult)
       });
 
       drawReadout(ctx, {

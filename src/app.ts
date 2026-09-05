@@ -8,6 +8,7 @@
 import { FTMSClient } from "./ftms/client.js";
 import { WsServer } from "./server/ws.js";
 import { startServer } from "./server/http.js";
+import { SettingsStore } from "./server/settings.js";
 import type { ConnectionState } from "./ble/types.js";
 import type { FtmsDataEvent } from "./ftms/client.js";
 import type { DiscoveredDevice } from "./ble/types.js";
@@ -34,6 +35,7 @@ export async function startFtmsApp(opts: StartFtmsAppOptions = {}): Promise<Ftms
 
   const client = new FTMSClient();
   const ws = new WsServer();
+  const settings = new SettingsStore();
 
   ws.emitState("idle");
 
@@ -51,7 +53,7 @@ export async function startFtmsApp(opts: StartFtmsAppOptions = {}): Promise<Ftms
     console.log(`[ftms] discovered: ${device.name} (${device.id}) rssi=${device.rssi}`);
   });
 
-  const server = await startServer(client, ws, port, opts.hostname, opts.tls);
+  const server = await startServer(client, ws, port, opts.hostname, opts.tls, settings);
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 

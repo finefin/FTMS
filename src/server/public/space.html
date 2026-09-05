@@ -85,6 +85,20 @@
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
     #mission { color: var(--amber); letter-spacing: 0.3em; }
 
+    /* Windowed/browser-only: go back to the dashboard. Hidden in VR along
+       with the rest of #hud. */
+    .dash-btn {
+      position: absolute; top: 50px; left: 18px; z-index: 11;
+      padding: 5px 12px; pointer-events: auto;
+      border: 1px solid rgba(127,232,255,0.45); border-radius: 3px;
+      background: rgba(127,232,255,0.10);
+      color: var(--hud);
+      font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+      text-decoration: none;
+      transition: background .15s ease, color .15s ease;
+    }
+    .dash-btn:hover { background: rgba(127,232,255,0.22); color: #fff; }
+
     /* ---- side gauges ---- */
     #velocity { left: 20px; top: 50%; transform: translateY(-50%); min-width: 190px; }
     #thrust  { right: 20px; top: 50%; transform: translateY(-50%); min-width: 160px; text-align: right; }
@@ -188,6 +202,7 @@
       <div class="seg" id="mission">FTMS · EARTH ORBIT → LUNAR ORBIT</div>
       <div class="seg"><span id="v-clock">00:00</span></div>
     </div>
+    <a class="dash-btn" href="/">⏻ Dashboard</a>
 
     <div id="reticle">
       <div class="rt-h" style="left:0"></div>
@@ -204,11 +219,11 @@
     </div>
 
     <div class="panel" id="velocity">
-      <div class="lbl">Velocity</div>
-      <div class="val"><span id="v-kms">0</span><small>*10⁶ km/s</small></div>
+      <div class="lbl">Pedal speed</div>
+      <div class="val"><span id="v-legspeed">0.0</span><small>km/h</small></div>
       <div class="bar"><span id="bar-speed"></span></div>
-      <div class="sub"><span id="v-kmh">0</span>*10⁶ km/h · <span id="v-c">0.000</span>% c</div>
-      <div class="sub"><span id="v-legspeed">0.0</span> km/h at the pedals</div>
+      <div class="sub"><span id="v-kms">0</span>*10⁶ km/s · <span id="v-kmh">0</span>*10⁶ km/h</div>
+      <div class="sub">warp ×<span id="v-warp">1</span> · <span id="v-c">0.000</span>% c</div>
     </div>
 
     <div class="panel" id="thrust">
@@ -244,7 +259,7 @@
 
     <div id="arrived">
       <div class="big">Lunar orbit achieved</div>
-      <div class="small">Docked at Lunar Station</div>
+      <div class="small">Welcome to the Moon</div>
     </div>
   </div>
 

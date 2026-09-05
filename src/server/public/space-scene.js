@@ -1,17 +1,18 @@
 (function () {
   // =====================================================================
   // space-scene.js
-  // A flight from an Earth-orbiting space station to a Moon-orbiting one,
-  // at true distances, driven by live FTMS telemetry:
+  // A flight from Earth to the Moon at true distances, driven by live
+  // FTMS telemetry:
   //   * speed  -> velocity through space (real km/h x WARP_FACTOR)
   //   * power  -> engine thrust: exhaust glow and streak intensity
   //
-  // The camera starts inside the hub of Space Station V (the double-wheel
-  // rotating station from 2001). When the rider starts pedalling, the ship
-  // undocks and accelerates out of the station, ramps up gradually, and
-  // crosses to the Moon.
+  // The ship starts inside the corridor station — the loop through the
+  // model at /assets/station.obj (served as /assets/station-model in the
+  // packaged app, where electron-builder drops *.obj) — undocks and
+  // crosses to the Moon, where the same corridor is mounted again as the
+  // arrival station.
   //
-  // Scale is 1 world unit = 1000 km. The station geometry is intentionally
+  // Scale is 1 world unit = 1000 km. Station geometry is intentionally
   // oversized relative to reality so it is visible at this cosmic scale.
   // =====================================================================
 
@@ -27,6 +28,12 @@
   var ARRIVE_KM = MOON_RADIUS_KM + MOON_ORBIT_KM;
 
   var WARP_FACTOR = 50000;
+
+  // Ceiling on the effective ship speed (km/h). Without it a high dashboard
+  // speed multiplier would finish the leg in a single frame — every large
+  // value would look identical. With it, even a ×10⁶ crank becomes a fast,
+  // visible ~1.5 s sweep across the leg instead of an instant cut.
+  var MAX_SHIP_KMH = 9.2e8;
 
   // --- Acceleration model ---
   // When the rider starts pedalling the ship does not jump to full speed.
@@ -258,135 +265,132 @@
   }
 
   // ---------------------------------------------------------------------
-  // Space Station V — the double-wheel rotating station from 2001
+  // Corridor station — assets/station.obj, the simple space-station
+  // corridor modelled in Blender (mirrored to assets/station-model so it
+  // survives electron-builder, which excludes *.obj). Mounted twice: as
+  // the launch corridor the ship starts inside (Earth end), and again at
+  // the Moon as the arrival corridor the ship flies into.
   // ---------------------------------------------------------------------
-  // Two counter-rotating toroidal rings connected by spokes to a central
-  // hub.  The camera starts inside the hub looking down the flight axis;
-  // when the rider starts pedalling the ship undocks and the station
-  // slides away behind.
-  var STATION_HULL  = new THREE.MeshLambertMaterial({ color: 0xc8ccd0 });
-  var STATION_DARK  = new THREE.MeshLambertMaterial({ color: 0x555a60 });
-  var STATION_ACCENT = new THREE.MeshLambertMaterial({ color: 0xff6622 });
 
-  function makeStationV() {
-    var g = new THREE.Group();
-
-    // --- Outer ring (larger, rotates +Y) --------------------------------
-    var ring1 = new THREE.Group();
-    var torus1 = new THREE.Mesh(
-      new THREE.TorusGeometry(4.5, 0.16, 16, 80), STATION_HULL);
-    torus1.rotation.x = Math.PI / 2;
-    ring1.add(torus1);
-    g.add(ring1);
-
-    // --- Inner ring (smaller, counter-rotates -Y) -----------------------
-    var ring2 = new THREE.Group();
-    var torus2 = new THREE.Mesh(
-      new THREE.TorusGeometry(3.0, 0.12, 12, 60), STATION_DARK);
-    torus2.rotation.x = Math.PI / 2;
-    ring2.add(torus2);
-    g.add(ring2);
-
-    // --- Central hub / spine --------------------------------------------
-    var hubLen = 2.8;
-    var hubR = 0.35;
-    var hub = new THREE.Mesh(
-      new THREE.CylinderGeometry(hubR, hubR, hubLen, 20, 1, true), STATION_HULL);
-    hub.rotation.x = Math.PI / 2;
-    g.add(hub);
-
-    // Hub end caps
-    var capGeo = new THREE.CircleGeometry(hubR, 20);
-    [-hubLen / 2, hubLen / 2].forEach(function (z) {
-      var cap = new THREE.Mesh(capGeo, STATION_DARK);
-      cap.position.z = z;
-      if (z < 0) cap.rotation.y = Math.PI;
-      g.add(cap);
-    });
-
-    // Interior lighting — point lights inside the hub illuminate the
-    // corridor and ring interior so the "inside" experience reads.
-    var hubLight = new THREE.PointLight(0xccddff, 1.2, 12);
-    hubLight.position.set(0, 0, 0);
-    g.add(hubLight);
-    var warmLight = new THREE.PointLight(0xffe8cc, 0.6, 8);
-    warmLight.position.set(0, 0, 1.2);
-    g.add(warmLight);
-
-    // --- Docking corridor (extends from the hub along +Z) ---------------
-    var corrLen = 1.4;
-    var corr = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.12, corrLen, 10, 1, true), STATION_DARK);
-    corr.rotation.x = Math.PI / 2;
-    corr.position.z = hubLen / 2 + corrLen / 2;
-    g.add(corr);
-
-    // Airlock ring at the corridor end
-    var airlock = new THREE.Mesh(
-      new THREE.TorusGeometry(0.16, 0.015, 8, 16), STATION_ACCENT);
-    airlock.position.z = hubLen / 2 + corrLen;
-    g.add(airlock);
-
-    // --- Spokes: hub → outer ring ---------------------------------------
-    var spokeOuter = new THREE.CylinderGeometry(0.03, 0.03, 4.2, 6);
-    for (var i = 0; i < 12; i++) {
-      var a = (i / 12) * Math.PI * 2;
-      var spoke = new THREE.Mesh(spokeOuter, STATION_HULL);
-      spoke.position.set(Math.cos(a) * 2.3, Math.sin(a) * 2.3, 0);
-      spoke.rotation.z = a - Math.PI / 2;
-      g.add(spoke);
+  // Minimal MTL reader — enough for a single flat material (Kd colour).
+  function parseMaterials(mtlText) {
+    var mats = {};
+    var cur = null;
+    if (!mtlText) return mats;
+    var lines = mtlText.split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].trim();
+      if (!t) continue;
+      if (t.indexOf('newmtl ') === 0) {
+        cur = t.slice(7).trim();
+        mats[cur] = { color: 0x8899bb, alpha: 1 };
+      } else if (cur && t.indexOf('Kd ') === 0) {
+        var p = t.slice(3).trim().split(/\s+/);
+        var r = clamp(parseFloat(p[0]) || 0, 0, 1);
+        var g = clamp(parseFloat(p[1]) || 0, 0, 1);
+        var b = clamp(parseFloat(p[2]) || 0, 0, 1);
+        mats[cur].color = (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255);
+      }
     }
-
-    // --- Spokes: hub → inner ring ---------------------------------------
-    var spokeInner = new THREE.CylinderGeometry(0.022, 0.022, 2.7, 5);
-    for (var i = 0; i < 8; i++) {
-      var a = (i / 8) * Math.PI * 2 + Math.PI / 16;
-      var spoke = new THREE.Mesh(spokeInner, STATION_DARK);
-      spoke.position.set(Math.cos(a) * 1.55, Math.sin(a) * 1.55, 0);
-      spoke.rotation.z = a - Math.PI / 2;
-      g.add(spoke);
-    }
-
-    // Store ring groups for rotation in tick()
-    g.userData.ring1 = ring1;
-    g.userData.ring2 = ring2;
-
-    g.userData.radius = 4.5;
-    return g;
+    return mats;
   }
 
-  // --- Moon orbital station (simpler, cylindrical) ----------------------
-  function makeMoonStation() {
-    var g = new THREE.Group();
-    var hull = STATION_HULL;
+  // => triangle-soup BufferGeometry. Faces use v/vt/vn triplets; quads and
+  // n-gons are fan-triangulated. Normals and UVs are optional but pass any
+  // that the file provides through verbatim.
+  function parseObj(text, mats) {
+    var V = [], VT = [], VN = [];
+    var pos = [], nrm = [], uv = [];
+    var curMat = null;
+    var geo = new THREE.BufferGeometry();
+    var keys = Object.keys(mats);
+    if (keys.length) curMat = mats[keys[0]];
 
-    // Central cylinder along Z
-    var body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.3, 0.3, 1.6, 12), hull);
-    body.rotation.x = Math.PI / 2;
-    g.add(body);
+    function emit(a, b, c) {
+      for (var k = 0; k < 3; k++) {
+        var tok = k === 0 ? a : k === 1 ? b : c;
+        var ids = tok.split('/');
+        var vi = (parseInt(ids[0], 10) - 1) * 3;
+        pos.push(V[vi], V[vi + 1], V[vi + 2]);
+        if (ids[2]) {
+          var ni = (parseInt(ids[2], 10) - 1) * 3;
+          nrm.push(VN[ni], VN[ni + 1], VN[ni + 2]);
+        }
+        if (ids[1]) {
+          var ti = (parseInt(ids[1], 10) - 1) * 2;
+          uv.push(VT[ti], VT[ti + 1]);
+        }
+      }
+    }
 
-    // Solar panel arrays — two flat panels on a truss along X
-    var panelGeo = new THREE.BoxGeometry(2.4, 0.02, 0.8);
-    var panelMat = new THREE.MeshLambertMaterial({ color: 0x2244aa });
-    [-1, 1].forEach(function (side) {
-      var p = new THREE.Mesh(panelGeo, panelMat);
-      p.position.x = side * 1.6;
-      g.add(p);
+    var lines = text.split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      var c = line.charAt(0);
+      if (c === 'v') {
+        var p;
+        if (line.charAt(1) === 'n') {
+          p = line.slice(2).trim().split(/\s+/);
+          VN.push(+p[0], +p[1], +p[2]);
+        } else if (line.charAt(1) === 't') {
+          p = line.slice(2).trim().split(/\s+/);
+          VT.push(+p[0], +p[1]);
+        } else if (line.charAt(1) === ' ') {
+          p = line.slice(2).trim().split(/\s+/);
+          V.push(+p[0], +p[1], +p[2]);
+        }
+      } else if (c === 'f') {
+        var toks = line.slice(2).trim().split(/\s+/);
+        for (var j = 1; j < toks.length - 1; j++) {
+          emit(toks[0], toks[j], toks[j + 1]);
+        }
+      } else if (c === 'u' && line.indexOf('usemtl ') === 0) {
+        curMat = mats[line.slice(7).trim()] || curMat;
+      }
+    }
+    if (!pos.length) throw new Error('no faces parsed from station.obj');
+
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    if (nrm.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+    if (uv.length) geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.userData.mat = curMat;
+    return geo;
+  }
+
+  // Build the two mounted corridor groups.
+  //   - start: scale 1, corridor centred on the group origin so the camera
+  //     (ship at origin) spawns mid-corridor.
+  //   - end: doubled so it reads from cosmic distance; flipped around Y so
+  //     its opening faces the arriving ship.
+  function mountStations(parts) {
+    var mats = parseMaterials(parts.mtl);
+    var geo = parseObj(parts.obj, mats);
+    var m = geo.userData.mat;
+    var mat = new THREE.MeshStandardMaterial({
+      color: m ? m.color : 0x8899bb,
+      side: THREE.DoubleSide,
+      roughness: 0.85,
+      metalness: 0.15
     });
-    var truss = new THREE.Mesh(
-      new THREE.BoxGeometry(3.6, 0.04, 0.04), STATION_DARK);
-    g.add(truss);
+    // OBJ bounding-box centre is (0, 0.176, -2.571); the corridor is hollow
+    // around x=0 along z, so slide it so its centre lands on the group origin.
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(0, -0.176, 2.571);
 
-    // Docking port
-    var dp = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, 0.3, 8), STATION_ACCENT);
-    dp.rotation.x = Math.PI / 2;
-    dp.position.z = 1.0;
-    g.add(dp);
+    function build(scale, flip) {
+      var g = new THREE.Group();
+      var m2 = mesh.clone();
+      if (flip) m2.rotation.y = Math.PI;
+      g.add(m2);
+      if (scale !== 1) g.scale.set(scale, scale, scale);
+      // Soft interior light so the corridor does not read as a black tube.
+      g.add(new THREE.PointLight(0xbfd8ff, 1.1, 30));
+      g.userData.radius = 4 * scale;
+      return g;
+    }
 
-    g.userData.radius = 1.6;
-    return g;
+    return { start: build(1, false), end: build(2, true) };
   }
 
   AFRAME.registerComponent('space-scene', {
@@ -422,16 +426,37 @@
       this.moon = makeBody(MOON_RADIUS_KM, makeMoonTexture());
       root.add(this.moon);
 
-      // Space Station V — the camera starts inside its hub.
-      // At departure the station sits between the camera (origin) and
-      // Earth; as the ship accelerates it slides backward and out of view.
-      this.earthStation = makeStationV();
-      root.add(this.earthStation);
-
-      // Moon orbital station — sits between camera and Moon, slides
-      // backward as we approach (Moon closes in from -Z).
-      this.moonStation = makeMoonStation();
-      root.add(this.moonStation);
+      // Corridor station model — loaded async from /assets and mounted as
+      // both the launch corridor (camera spawns inside it) and the arrival
+      // corridor at the Moon. The OBJ is mirrored at build time to a
+      // no-extension twin (/assets/station-model) because electron-builder
+      // strips *.obj from the packaged app; try that first, then the raw
+      // OBJ for dev where the file is served straight from src/. layout()
+      // guards on this.stations.
+      this.stations = null;
+      var comp = this;
+      function fetchText(urls) {
+        var i = 0;
+        function attempt() {
+          if (i >= urls.length) return Promise.resolve(null);
+          return fetch(urls[i++]).then(function (r) {
+            return r.ok ? r.text() : attempt();
+          });
+        }
+        return attempt();
+      }
+      Promise.all([
+        fetchText(['/assets/station-model', '/assets/station.obj']),
+        fetch('/assets/station.mtl').then(function (r) { return r.ok ? r.text() : ''; })
+      ]).then(function (parts) {
+        if (!parts[0]) throw new Error('station model not served at /assets');
+        comp.stations = mountStations({ obj: parts[0], mtl: parts[1] });
+        root.add(comp.stations.start);
+        root.add(comp.stations.end);
+        comp.layout();
+      }).catch(function (err) {
+        console.error('[space] corridor station:', err);
+      });
 
       this.buildWarp();
       root.add(this.warp);
@@ -508,15 +533,19 @@
       this.earth.position.set(0, 0, this._posKm / KM_PER_UNIT);
       this.moon.position.set(0, 0, -(EARTH_MOON_KM - this._posKm) / KM_PER_UNIT);
 
-      // Earth station sits just ahead of Earth (between camera and Earth).
-      // It starts at ~0 km from the camera (inside the hub) and slides
-      // backward as the ship undocks and accelerates.
-      var stationZ = Math.max(0, (this._posKm - DEPART_KM) / KM_PER_UNIT - 0.4);
-      this.earthStation.position.set(0, 0, stationZ);
+      if (!this.stations) return;
 
-      // Moon station sits just ahead of the Moon (between camera and Moon).
-      var moonStationZ = Math.max(0, (EARTH_MOON_KM - this._posKm) / KM_PER_UNIT - 1.8);
-      this.moonStation.position.set(0, 0, -moonStationZ);
+      // Launch corridor: the camera spawns in its middle (origin) and the
+      // station slides backward +Z as the ship undocks and flies -Z toward
+      // the Moon.
+      this.stations.start.position.set(
+        0, 0, Math.max(0, (this._posKm - DEPART_KM) / KM_PER_UNIT - 0.4));
+
+      // Arrival corridor: rides just ahead of the Moon through the approach
+      // and ends up around the camera at arrival, so the flight literally
+      // finishes inside it.
+      var moonZ = Math.max(0, (EARTH_MOON_KM - this._posKm) / KM_PER_UNIT - 1.8);
+      this.stations.end.position.set(0, 0, -moonZ);
     },
 
     tick: function (time, timeDelta) {
@@ -529,14 +558,16 @@
       // Once the rider starts pedalling (_targetSpeed > 0) the ship
       // accelerates exponentially toward full speed.  This makes the
       // departure feel like the ship is powering up and pulling away
-      // from the station, rather than teleporting to full velocity.
+      // rather than teleporting to full velocity.
       if (this._targetSpeed > 0.5 && this._accel < 0.999) {
         this._accel += (1 - this._accel) * (1 - Math.pow(0.5, dt / ACCEL_HALF_LIFE));
       }
 
       // --- Travel, at real distances ---
       this._arrivalEase += ((this._arrived ? 0 : 1) - this._arrivalEase) * ARRIVAL_EASE;
-      var shipKmh = this._speedKmh * WARP_FACTOR * this._accel * this._arrivalEase;
+      var shipKmh = Math.min(
+        this._speedKmh * WARP_FACTOR * this._accel * this._arrivalEase,
+        MAX_SHIP_KMH);
       this._shipKmh = shipKmh;
       this._posKm += shipKmh * (dt / 3600);
       if (this._posKm >= this._targetKm) {
@@ -548,14 +579,6 @@
       // Slow body rotation
       this.earth.userData.mesh.rotation.y += dt * 0.02;
       this.moon.userData.mesh.rotation.y += dt * 0.005;
-
-      // Rotate station rings (Space Station V counter-rotates)
-      if (this.earthStation.userData.ring1) {
-        this.earthStation.userData.ring1.rotation.y += dt * 0.12;
-      }
-      if (this.earthStation.userData.ring2) {
-        this.earthStation.userData.ring2.rotation.y -= dt * 0.18;
-      }
 
       this.updateWarp(dt, shipKmh);
     },

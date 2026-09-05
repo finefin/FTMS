@@ -110,6 +110,8 @@ export class BleConnection extends EventEmitter {
   private descriptions: Map<string, DiscoveredDevice> = new Map();
   private _device: DiscoveredDevice | null = null;
   private _state: ConnectionState = "idle";
+  /** Serialises all BLE operations so scan/connect/init/disconnect never race. */
+  private _queue: Promise<void> = Promise.resolve();
 
   get state(): ConnectionState {
     return this._state;
@@ -127,16 +129,37 @@ export class BleConnection extends EventEmitter {
   private setState(state: ConnectionState, detail?: { deviceId?: string; error?: string }) {
     this._state = state;
     const event: ConnectionStateEvent = { state, ...detail };
-    // Carry the human-readable name on every state event. Consumers (the
-    // WebSocket payload, the dashboard, the ride HUD) all want to label the
-    // connection, and the device id alone is not presentable.
     if (this._device) {
       event.deviceName = this._device.name ?? this._device.address ?? this._device.id;
     }
     this.emit("stateChange", event);
   }
 
+  /** Run a function exclusively: no two calls overlap. */
+  private runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this._queue.then(() => fn(), () => fn());
+    // Chain the queue forward — a rejection in `fn` must not block subsequent ops.
+    this._queue = next.then(() => {}, () => {});
+    return next;
+  }
+
   async init(timeoutMs = 15000): Promise<void> {
+    await this.runExclusive(() => this.doInit(timeoutMs));
+  }
+
+  async scan(timeoutMs = 10000): Promise<DiscoveredDevice[]> {
+    return this.runExclusive(() => this.doScan(timeoutMs));
+  }
+
+  async connect(deviceId: string): Promise<void> {
+    await this.runExclusive(() => this.doConnect(deviceId));
+  }
+
+  async disconnect(): Promise<void> {
+    await this.runExclusive(() => this.doDisconnect());
+  }
+
+  private async doInit(timeoutMs = 15000): Promise<void> {
     const noble = await this.getBackend();
     if (noble.state === "poweredOn") return;
     return new Promise((resolve, reject) => {
@@ -167,7 +190,7 @@ export class BleConnection extends EventEmitter {
     });
   }
 
-  async scan(timeoutMs = 10000): Promise<DiscoveredDevice[]> {
+  private async doScan(timeoutMs = 10000): Promise<DiscoveredDevice[]> {
     const noble = await this.getBackend();
     this.setState("scanning");
     const devices: DiscoveredDevice[] = [];
@@ -220,14 +243,31 @@ export class BleConnection extends EventEmitter {
       setTimeout(() => {
         noble.removeListener("discover", onDiscover);
         noble.stopScanning(() => {});
-        this._state = "idle";
+        // A scan started while an established connection was live must not
+        // clobber the connected state (the dashboard/scene read it).
+        if (!this.peripheral) {
+          this._state = "idle";
+        }
         resolve(devices);
       }, timeoutMs);
     });
   }
 
-  async connect(deviceId: string): Promise<void> {
+  private async doConnect(deviceId: string): Promise<void> {
     const noble = await this.getBackend();
+
+    // Already have a live connection (e.g. the auto-connect loop or a manual
+    // scan button re-requesting a connect while streaming). Don't tear it
+    // down or report a spurious error — if it's the same device, keep it and
+    // just re-assert "connected".
+    if (this.peripheral) {
+      if (this._device?.id === deviceId) {
+        this.setState("connected", { deviceId });
+        return;
+      }
+      await this.doDisconnect();
+    }
+
     this._device = this.descriptions.get(deviceId) ?? null;
     this.setState("connecting", { deviceId });
 
@@ -343,7 +383,7 @@ export class BleConnection extends EventEmitter {
     await promisify<void>((cb) => char.write(data, false, cb));
   }
 
-  async disconnect(): Promise<void> {
+  private async doDisconnect(): Promise<void> {
     const noble = await this.getBackend();
     if (this.peripheral) {
       await promisify<void>((cb) => this.peripheral.disconnect(cb)).catch(() => {});
